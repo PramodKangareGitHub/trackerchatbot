@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.vite/
+*.log
+*.lock-wscript
+.DS_Store
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Environment files
+.env
+backend/.env
