@@ -17,7 +17,14 @@ type Widget = {
   config?: Record<string, unknown>;
 };
 
-type SectionId = "upload" | "datasets" | "records" | "dashboard";
+type ManagedUser = {
+  id: string;
+  email: string;
+  role: string;
+  created_at?: string;
+};
+
+type SectionId = "upload" | "datasets" | "records" | "dashboard" | "users";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 const withBase = (path: string) => {
@@ -25,19 +32,12 @@ const withBase = (path: string) => {
   return path.startsWith("http") ? path : `${trimmedBase}${path}`;
 };
 
-const api = async <T,>(path: string, options?: RequestInit): Promise<T> => {
-  const res = await fetch(withBase(path), {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || res.statusText || "Request failed");
-  }
-  return res.json();
+type AdminPanelProps = {
+  authToken: string;
+  authUserRole: string;
 };
 
-const AdminPanel = () => {
+const AdminPanel = ({ authToken, authUserRole }: AdminPanelProps) => {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [datasetsLoading, setDatasetsLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -64,6 +64,42 @@ const AdminPanel = () => {
   const [widgets, setWidgets] = useState<Widget[]>([]);
   const [savingWidgets, setSavingWidgets] = useState(false);
   const [activeSection, setActiveSection] = useState<SectionId>("upload");
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserPassword, setNewUserPassword] = useState("");
+  const [newUserRole, setNewUserRole] = useState<
+    "viewer" | "admin" | "developer"
+  >("viewer");
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [editingPassword, setEditingPassword] = useState("");
+  const [savingPassword, setSavingPassword] = useState(false);
+
+  const authHeaders = useMemo(
+    () => ({ Authorization: `Bearer ${authToken}` }),
+    [authToken]
+  );
+
+  const authedFetch = async (path: string, options?: RequestInit) => {
+    const headers = { ...(options?.headers || {}), ...authHeaders };
+    return fetch(withBase(path), { ...options, headers });
+  };
+
+  const api = async <T,>(path: string, options?: RequestInit): Promise<T> => {
+    const res = await authedFetch(path, {
+      headers: {
+        "Content-Type": "application/json",
+        ...(options?.headers || {}),
+      },
+      ...options,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || res.statusText || "Request failed");
+    }
+    return res.json();
+  };
 
   const sections: { id: SectionId; label: string; hint?: string }[] = [
     { id: "upload", label: "Upload", hint: "Excel" },
@@ -71,6 +107,10 @@ const AdminPanel = () => {
     { id: "records", label: "Add / Update Records" },
     { id: "dashboard", label: "Dashboard" },
   ];
+
+  if (authUserRole === "admin") {
+    sections.push({ id: "users", label: "User Management" });
+  }
 
   const loadDatasets = async () => {
     setDatasetsLoading(true);
@@ -105,10 +145,29 @@ const AdminPanel = () => {
     }
   };
 
+  const loadUsers = async () => {
+    setUsersLoading(true);
+    setError(null);
+    try {
+      const data = await api<ManagedUser[]>("/api/auth/users");
+      setUsers(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUsersLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadDatasets();
     loadWidgets();
   }, []);
+
+  useEffect(() => {
+    if (activeSection === "users" && authUserRole === "admin") {
+      loadUsers();
+    }
+  }, [activeSection, authUserRole]);
 
   useEffect(() => {
     if (selectedDataset) {
@@ -212,8 +271,8 @@ const AdminPanel = () => {
   const handleExport = async () => {
     if (!selectedDataset) return;
     try {
-      const res = await fetch(
-        withBase(`/api/admin/datasets/${selectedDataset.id}/export`)
+      const res = await authedFetch(
+        `/api/admin/datasets/${selectedDataset.id}/export`
       );
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -247,7 +306,7 @@ const AdminPanel = () => {
       const form = new FormData();
       form.append("file", uploadFile);
 
-      const res = await fetch(withBase("/api/upload"), {
+      const res = await authedFetch("/api/upload", {
         method: "POST",
         body: form,
       });
@@ -331,6 +390,48 @@ const AdminPanel = () => {
 
   const removeWidget = (idx: number) => {
     setWidgets((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleCreateUser = async () => {
+    setError(null);
+    setCreatingUser(true);
+    try {
+      await api("/api/auth/register", {
+        method: "POST",
+        body: JSON.stringify({
+          email: newUserEmail,
+          password: newUserPassword,
+          role: newUserRole,
+        }),
+      });
+      setNewUserEmail("");
+      setNewUserPassword("");
+      setNewUserRole("viewer");
+      await loadUsers();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingUser(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    if (!editingUserId || !editingPassword) return;
+    setError(null);
+    setSavingPassword(true);
+    try {
+      await api(`/api/auth/users/${editingUserId}/password`, {
+        method: "POST",
+        body: JSON.stringify({ new_password: editingPassword }),
+      });
+      setEditingUserId(null);
+      setEditingPassword("");
+      await loadUsers();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingPassword(false);
+    }
   };
 
   const renderContent = () => {
@@ -682,6 +783,194 @@ const AdminPanel = () => {
             )}
           </section>
         );
+      case "users":
+        return (
+          <section className="rounded-2xl border border-slate-200 bg-white/80 p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800/70">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-slate-800 dark:text-slate-100">
+                Create User
+              </h3>
+              <span className="text-xs text-slate-500 dark:text-slate-400">
+                Viewer / Admin / Developer
+              </span>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={newUserEmail}
+                  onChange={(e) => setNewUserEmail(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  placeholder="user@example.com"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={newUserPassword}
+                  onChange={(e) => setNewUserPassword(e.target.value)}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  placeholder="Set a password"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                  Role
+                </label>
+                <select
+                  value={newUserRole}
+                  onChange={(e) =>
+                    setNewUserRole(
+                      e.target.value as "viewer" | "admin" | "developer"
+                    )
+                  }
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                >
+                  <option value="viewer">Viewer</option>
+                  <option value="admin">Admin</option>
+                  <option value="developer">Developer</option>
+                </select>
+              </div>
+            </div>
+            <div className="mt-4 flex items-center justify-between">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                New users must log in with the email/password you set.
+              </p>
+              <button
+                type="button"
+                onClick={handleCreateUser}
+                disabled={creatingUser || !newUserEmail || !newUserPassword}
+                className="inline-flex items-center rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-700 disabled:opacity-60"
+              >
+                {creatingUser ? "Creating…" : "Create user"}
+              </button>
+            </div>
+
+            <div className="mt-6 rounded-xl border border-slate-200 bg-white/70 p-4 text-sm shadow-sm dark:border-slate-800 dark:bg-slate-900/70">
+              <div className="mb-2 flex items-center justify-between">
+                <h4 className="font-semibold text-slate-800 dark:text-slate-100">
+                  Existing users
+                </h4>
+                <button
+                  type="button"
+                  onClick={loadUsers}
+                  className="text-xs text-sky-600 underline hover:text-sky-700 dark:text-sky-300"
+                >
+                  Refresh
+                </button>
+              </div>
+              {usersLoading && (
+                <p className="text-slate-500 dark:text-slate-400">
+                  Loading users…
+                </p>
+              )}
+              {!usersLoading && !users.length && (
+                <p className="text-slate-500 dark:text-slate-400">
+                  No users yet.
+                </p>
+              )}
+              {!usersLoading && users.length > 0 && (
+                <div className="overflow-hidden rounded-lg border border-slate-100 dark:border-slate-800">
+                  <table className="min-w-full divide-y divide-slate-100 text-left text-sm dark:divide-slate-800">
+                    <thead className="bg-slate-50 dark:bg-slate-800">
+                      <tr>
+                        <th className="px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">
+                          Email
+                        </th>
+                        <th className="px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">
+                          Role
+                        </th>
+                        <th className="px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">
+                          Created
+                        </th>
+                        <th className="px-3 py-2 font-semibold text-slate-700 dark:text-slate-200">
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {users.map((u) => (
+                        <tr key={u.id}>
+                          <td className="px-3 py-2 text-slate-800 dark:text-slate-100">
+                            {u.email}
+                          </td>
+                          <td className="px-3 py-2 capitalize text-slate-800 dark:text-slate-100">
+                            {u.role}
+                          </td>
+                          <td className="px-3 py-2 text-slate-500 dark:text-slate-400">
+                            {u.created_at
+                              ? new Date(u.created_at).toLocaleString()
+                              : ""}
+                          </td>
+                          <td className="px-3 py-2 text-slate-700 dark:text-slate-200">
+                            {u.role === "viewer" ? (
+                              editingUserId === u.id ? (
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                                  <input
+                                    type="password"
+                                    value={editingPassword}
+                                    onChange={(e) =>
+                                      setEditingPassword(e.target.value)
+                                    }
+                                    className="w-full min-w-[160px] rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                    placeholder="New password"
+                                  />
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={handleChangePassword}
+                                      disabled={
+                                        savingPassword || !editingPassword
+                                      }
+                                      className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
+                                    >
+                                      {savingPassword ? "Saving…" : "Save"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingUserId(null);
+                                        setEditingPassword("");
+                                      }}
+                                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingUserId(u.id);
+                                    setEditingPassword("");
+                                  }}
+                                  className="text-xs font-semibold text-sky-600 underline hover:text-sky-700 dark:text-sky-300"
+                                >
+                                  Change password
+                                </button>
+                              )
+                            ) : (
+                              <span className="text-xs text-slate-500">
+                                N/A
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </section>
+        );
       case "dashboard":
       default:
         return (
@@ -790,7 +1079,7 @@ const AdminPanel = () => {
         <aside className="h-full rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-800/70">
           <div className="mb-4">
             <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
-              Admin
+              {authUserRole === "developer" ? "Developer" : "Admin"}
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
               Manage datasets and dashboards

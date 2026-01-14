@@ -14,8 +14,11 @@ from app.services.dataset_registry import get_dataset
 from app.services.filter_discovery import fetch_distinct_values, identify_candidate_columns
 from app.services.langchain_intent import IntentResult, generate_intent, intent_provider
 from app.utils.sql_safety import SQLValidationError, execute_safe_sql, validate_sql
+from app.services.auth_utils import require_user
+from app.models.dataset_column_preference import DatasetColumnPreference
+from app.models.user import User
 
-router = APIRouter(prefix="/api", tags=["chat"])
+router = APIRouter(prefix="/api", tags=["chat"], dependencies=[Depends(require_user)])
 
 FILTER_SKIP = {"sl_no", "slno", "serial_no", "serialno"}
 DATE_BUCKET_CANONICAL = {"jp_posting_date_to_hcl"}
@@ -311,7 +314,11 @@ def _inject_filters(sql: str, filters: list[dict[str, Any]]) -> tuple[str, Dict[
 
 
 @router.post("/drill")
-async def drill_endpoint(payload: DrillRequest, db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def drill_endpoint(
+    payload: DrillRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_user),
+) -> Dict[str, Any]:
     dataset = get_dataset(payload.dataset_id, db)
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -377,7 +384,29 @@ async def drill_endpoint(payload: DrillRequest, db: Session = Depends(get_db)) -
         raise HTTPException(status_code=500, detail=f"Failed to execute SQL: {exc}") from exc
 
     result_columns = list(rows[0].keys()) if rows else list(columns)
-    result_filter_groups = _result_filter_groups(rows, result_columns)
+    # Apply per-user column preferences for drill results
+    pref = (
+        db.query(DatasetColumnPreference)
+        .filter(
+            DatasetColumnPreference.dataset_id == dataset.id,
+            DatasetColumnPreference.user_id == current_user.id,
+        )
+        .first()
+    )
+    if pref and pref.columns_json:
+        selected_columns = [c for c in pref.columns_json if c in result_columns]
+    else:
+        selected_columns = list(result_columns)
+    if not selected_columns:
+        selected_columns = list(result_columns)
+
+    filtered_rows = [
+        {col: row[col] for col in selected_columns if col in row}
+        for row in rows
+    ]
+
+    result_columns = selected_columns
+    result_filter_groups = _result_filter_groups(filtered_rows, result_columns)
     filtered_result_groups = _filter_allowed_groups(result_filter_groups, columns)
 
     if filtered_result_groups:
@@ -402,7 +431,7 @@ async def drill_endpoint(payload: DrillRequest, db: Session = Depends(get_db)) -
         "sql": validated_sql,
         "filter_groups": filter_groups_out,
         "result": {
-            "rows": rows,
+            "rows": filtered_rows,
             "row_count": len(rows),
             "columns": result_columns,
         },

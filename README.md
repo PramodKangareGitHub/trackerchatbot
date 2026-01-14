@@ -16,8 +16,8 @@ Setup
 
    - cd backend
    - python -m venv .venv && source .venv/Scripts/activate (PowerShell: .venv\Scripts\Activate)
-   - pip install fastapi uvicorn[standard] python-dotenv sqlalchemy pandas openpyxl langchain-core langchain-openai pydantic
-   - uvicorn app.main:app --reload
+   - pip install -r requirements.txt
+   - Start backend (uvicorn): uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 2. Frontend
    - cd frontend
@@ -41,3 +41,8 @@ Development tips
 
 - Keep backend and frontend running separately.
 - Theme and admin/viewer mode toggles live in the UI header.
+- Alembic quick commands (from backend/):
+  - alembic stamp head
+  - alembic stamp base
+  - alembic revision --autogenerate -m "Initial migration"
+  - alembic upgrade head

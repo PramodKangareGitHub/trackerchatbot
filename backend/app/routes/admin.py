@@ -13,6 +13,7 @@ from sqlalchemy import text
 
 from app.db import engine, get_db
 from app.models.dashboard_widget import DashboardWidget
+from app.services.auth_utils import require_admin_or_developer
 from app.services.dataset_registry import (
     delete_all_datasets,
     delete_dataset,
@@ -20,7 +21,11 @@ from app.services.dataset_registry import (
     list_datasets,
 )
 
-router = APIRouter(prefix="/api/admin", tags=["admin"])
+router = APIRouter(
+    prefix="/api/admin",
+    tags=["admin"],
+    dependencies=[Depends(require_admin_or_developer)],
+)
 
 
 class DashboardWidgetPayload(BaseModel):

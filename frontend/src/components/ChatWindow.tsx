@@ -33,6 +33,7 @@ type Dataset = {
   id: string;
   original_file_name: string;
   table_name: string;
+  columns?: string[];
 };
 
 const formatDatasetName = (name: string) => {
@@ -66,9 +67,10 @@ const withBase = (path: string) => {
 
 type ChatWindowProps = {
   showSql?: boolean;
+  authToken?: string | null;
 };
 
-const ChatWindow = ({ showSql = false }: ChatWindowProps) => {
+const ChatWindow = ({ showSql = false, authToken }: ChatWindowProps) => {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [state, setState] = useState<ChatState>({ status: "idle" });
@@ -79,11 +81,33 @@ const ChatWindow = ({ showSql = false }: ChatWindowProps) => {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [datasetsLoading, setDatasetsLoading] = useState(false);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string>("");
+  const [columnPrefsOpen, setColumnPrefsOpen] = useState(false);
+  const [columnPrefsLoading, setColumnPrefsLoading] = useState(false);
+  const [columnPrefsSaving, setColumnPrefsSaving] = useState(false);
+  const [columnPrefs, setColumnPrefs] = useState<Record<string, Set<string>>>(
+    {}
+  );
+  const [columnPrefsError, setColumnPrefsError] = useState<string | null>(null);
   const [lastQuestion, setLastQuestion] = useState<string>("");
   const [showHelp, setShowHelp] = useState(false);
   const [pinnedQuestions, setPinnedQuestions] = useState<
     { id: string; question: string }[]
   >([]);
+  const [customizeOpen, setCustomizeOpen] = useState(false);
+  const gridCols = customizeOpen
+    ? "lg:grid-cols-[minmax(0,1fr)_360px]"
+    : "lg:grid-cols-1";
+
+  const authHeaders = useMemo(
+    () => (authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    [authToken]
+  );
+
+  const authedFetch = (path: string, options?: RequestInit) => {
+    const target = withBase(path);
+    const headers = { ...(options?.headers || {}), ...authHeaders };
+    return fetch(target, { ...options, headers });
+  };
 
   const isChartAllowed = (cols: string[]): boolean => {
     if (!cols.length) return false;
@@ -239,7 +263,7 @@ const ChatWindow = ({ showSql = false }: ChatWindowProps) => {
     setDatasetsLoading(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(withBase("/api/admin/datasets"));
+      const res = await authedFetch("/api/datasets");
       if (!res.ok) {
         throw new Error(res.statusText || "Failed to load datasets");
       }
@@ -265,6 +289,64 @@ const ChatWindow = ({ showSql = false }: ChatWindowProps) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Load column preferences for the selected dataset (per user)
+  useEffect(() => {
+    const loadPrefs = async () => {
+      if (!selectedDatasetId) return;
+      const datasetColumns =
+        datasets.find((d) => d.id === selectedDatasetId)?.columns || [];
+
+      // Apply default (all columns) if we don't have prefs yet
+      if (datasetColumns.length) {
+        setColumnPrefs((prev) => {
+          if (prev[selectedDatasetId]) return prev;
+          return {
+            ...prev,
+            [selectedDatasetId]: new Set(datasetColumns),
+          };
+        });
+      }
+
+      setColumnPrefsLoading(true);
+      setColumnPrefsError(null);
+      try {
+        const res = await authedFetch(
+          `/api/datasets/${encodeURIComponent(
+            selectedDatasetId
+          )}/column-preferences`
+        );
+        if (!res.ok) {
+          throw new Error(
+            res.statusText || "Failed to load column preferences"
+          );
+        }
+        const data: { columns: string[]; selected: string[] } =
+          await res.json();
+        const allowed = data.columns || datasetColumns;
+        const selected =
+          data.selected && data.selected.length ? data.selected : allowed;
+        setColumnPrefs((prev) => ({
+          ...prev,
+          [selectedDatasetId]: new Set(
+            selected.filter((c) => allowed.includes(c))
+          ),
+        }));
+      } catch (err) {
+        console.warn("Failed to load column preferences", err);
+        setColumnPrefsError(
+          err instanceof Error
+            ? err.message
+            : "Failed to load column preferences"
+        );
+      } finally {
+        setColumnPrefsLoading(false);
+      }
+    };
+
+    loadPrefs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDatasetId, datasets.map((d) => d.id).join(",")]);
+
   // Load pinned questions for the selected dataset
   useEffect(() => {
     const loadPins = async () => {
@@ -273,10 +355,8 @@ const ChatWindow = ({ showSql = false }: ChatWindowProps) => {
         return;
       }
       try {
-        const res = await fetch(
-          withBase(
-            `/api/pins?dataset_id=${encodeURIComponent(selectedDatasetId)}`
-          )
+        const res = await authedFetch(
+          `/api/pins?dataset_id=${encodeURIComponent(selectedDatasetId)}`
         );
         if (!res.ok) throw new Error(res.statusText || "Failed to load pins");
         const data = await res.json();
@@ -301,7 +381,7 @@ const ChatWindow = ({ showSql = false }: ChatWindowProps) => {
       if (filterGroups.length) return;
       if (state.status !== "idle") return;
       try {
-        const res = await fetch(withBase("/api/chat"), {
+        const res = await authedFetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -482,7 +562,7 @@ const ChatWindow = ({ showSql = false }: ChatWindowProps) => {
     });
 
     try {
-      const res = await fetch(withBase("/api/chat"), {
+      const res = await authedFetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -586,7 +666,7 @@ const ChatWindow = ({ showSql = false }: ChatWindowProps) => {
     }
     if (pinnedQuestions.some((p) => p.question === trimmed)) return;
     try {
-      const res = await fetch(withBase("/api/pins"), {
+      const res = await authedFetch("/api/pins", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -613,10 +693,9 @@ const ChatWindow = ({ showSql = false }: ChatWindowProps) => {
   const unpinQuestion = async (pinId: string) => {
     if (!pinId) return;
     try {
-      const res = await fetch(
-        withBase(`/api/pins/${encodeURIComponent(pinId)}`),
-        { method: "DELETE" }
-      );
+      const res = await authedFetch(`/api/pins/${encodeURIComponent(pinId)}`, {
+        method: "DELETE",
+      });
       if (!res.ok)
         throw new Error(res.statusText || "Failed to unpin question");
       setPinnedQuestions((prev) => prev.filter((p) => p.id !== pinId));
@@ -645,6 +724,81 @@ const ChatWindow = ({ showSql = false }: ChatWindowProps) => {
         selectedDataset.original_file_name || selectedDataset.table_name
       )
     : "";
+
+  const selectedColumnsForDataset = useMemo(() => {
+    const cols = selectedDataset?.columns || [];
+    const saved = columnPrefs[selectedDatasetId];
+    if (saved) return Array.from(saved);
+    return cols;
+  }, [selectedDataset, selectedDatasetId, columnPrefs]);
+
+  const toggleColumnPreference = (col: string) => {
+    if (!selectedDatasetId) return;
+    setColumnPrefs((prev) => {
+      const current = new Set(
+        prev[selectedDatasetId] || selectedDataset?.columns || []
+      );
+      if (current.has(col)) current.delete(col);
+      else current.add(col);
+      return { ...prev, [selectedDatasetId]: current };
+    });
+  };
+
+  const setAllColumnPreferences = (checked: boolean) => {
+    if (!selectedDatasetId || !selectedDataset?.columns?.length) return;
+    setColumnPrefs((prev) => ({
+      ...prev,
+      [selectedDatasetId]: checked
+        ? new Set(selectedDataset.columns)
+        : new Set<string>(),
+    }));
+  };
+
+  const saveColumnPreferences = async () => {
+    if (!selectedDatasetId) return;
+    const columnsToSave = selectedColumnsForDataset;
+    if (!columnsToSave.length) {
+      setColumnPrefsError("Select at least one column");
+      return;
+    }
+    setColumnPrefsSaving(true);
+    setColumnPrefsError(null);
+    try {
+      const res = await authedFetch(
+        `/api/datasets/${encodeURIComponent(
+          selectedDatasetId
+        )}/column-preferences`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ columns: columnsToSave }),
+        }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(
+          body.detail || res.statusText || "Failed to save preferences"
+        );
+      }
+      const data: { selected: string[] } = await res.json();
+      setColumnPrefs((prev) => ({
+        ...prev,
+        [selectedDatasetId]: new Set(
+          (data.selected || columnsToSave).filter((c) =>
+            (selectedDataset?.columns || []).includes(c)
+          )
+        ),
+      }));
+      setStatusMessage("Column preferences saved");
+      setColumnPrefsOpen(false);
+    } catch (err) {
+      setColumnPrefsError(
+        err instanceof Error ? err.message : "Failed to save preferences"
+      );
+    } finally {
+      setColumnPrefsSaving(false);
+    }
+  };
   useEffect(() => {
     if (!messages.length) {
       const trackerName = selectedDatasetName || "your tracker";
@@ -780,7 +934,7 @@ const ChatWindow = ({ showSql = false }: ChatWindowProps) => {
     });
 
     try {
-      const res = await fetch(withBase("/api/drill"), {
+      const res = await authedFetch("/api/drill", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -835,9 +989,26 @@ const ChatWindow = ({ showSql = false }: ChatWindowProps) => {
   };
 
   return (
-    <div className="grid h-[85vh] max-h-[85vh] gap-6 lg:grid-cols-[2fr,1.1fr]">
+    <div className={`relative grid h-[85vh] max-h-[85vh] gap-6 ${gridCols}`}>
+      <button
+        type="button"
+        aria-label={
+          customizeOpen ? "Collapse customize panel" : "Expand customize panel"
+        }
+        aria-expanded={customizeOpen}
+        onClick={() => setCustomizeOpen((prev) => !prev)}
+        className="absolute right-4 top-3 z-30 flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 shadow-lg transition hover:-translate-y-0.5 hover:border-purple-300 hover:text-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+      >
+        <span
+          className={`text-lg transition-transform ${
+            customizeOpen ? "rotate-180" : "rotate-0"
+          }`}
+        >
+          ⚙
+        </span>
+      </button>
       <div className="flex h-full flex-col gap-4 overflow-hidden rounded-2xl border border-sky-200/80 bg-white/80 p-6 shadow-lg shadow-sky-100/80 backdrop-blur dark:border-sky-500/50 dark:bg-slate-800/60 dark:shadow-sky-900/40">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-sky-100 pb-3 dark:border-sky-900/40">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-sky-100 pb-3 pr-16 lg:pr-24 dark:border-sky-900/40">
           <div>
             <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">
               Chat about
@@ -877,8 +1048,130 @@ const ChatWindow = ({ showSql = false }: ChatWindowProps) => {
                 </option>
               ))}
             </select>
+            {selectedDataset && (
+              <button
+                type="button"
+                onClick={() => setColumnPrefsOpen(true)}
+                className="rounded-lg border border-purple-500 bg-white px-3 py-1 text-xs font-semibold text-purple-700 shadow-sm hover:border-purple-600 hover:text-purple-800 focus:border-purple-600 focus:outline-none focus:ring-2 focus:ring-purple-200 dark:border-purple-400/80 dark:bg-slate-900 dark:text-purple-100 dark:hover:border-purple-300 dark:hover:text-purple-50"
+              >
+                Column prefs
+              </button>
+            )}
           </div>
         </div>
+
+        {columnPrefsOpen && selectedDataset && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                    Column preferences
+                  </p>
+                  <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                    {formatDatasetName(
+                      selectedDataset.original_file_name ||
+                        selectedDataset.table_name
+                    )}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setColumnPrefsOpen(false)}
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                >
+                  Close
+                </button>
+              </div>
+
+              {columnPrefsError && (
+                <div className="mb-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-700 dark:bg-rose-900/40 dark:text-rose-100">
+                  {columnPrefsError}
+                </div>
+              )}
+
+              <div className="max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-800">
+                {!columnPrefsLoading && selectedDataset.columns?.length && (
+                  <div className="mb-3 flex items-center gap-3 text-xs">
+                    <label className="flex items-center gap-2 font-semibold text-slate-700 dark:text-slate-100">
+                      <input
+                        type="checkbox"
+                        checked={
+                          selectedColumnsForDataset.length ===
+                          selectedDataset.columns.length
+                        }
+                        onChange={(e) =>
+                          setAllColumnPreferences(e.target.checked)
+                        }
+                        className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+                      />
+                      Toggle all
+                    </label>
+                    <span className="text-slate-500 dark:text-slate-400">
+                      {selectedColumnsForDataset.length}/
+                      {selectedDataset.columns.length} selected
+                    </span>
+                  </div>
+                )}
+                {columnPrefsLoading && (
+                  <p className="text-slate-500 dark:text-slate-400">
+                    Loading columns…
+                  </p>
+                )}
+                {!columnPrefsLoading && !selectedDataset.columns?.length && (
+                  <p className="text-slate-500 dark:text-slate-400">
+                    No columns found.
+                  </p>
+                )}
+                {!columnPrefsLoading && selectedDataset.columns?.length && (
+                  <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {selectedDataset.columns.map((col) => {
+                      const checked = selectedColumnsForDataset.includes(col);
+                      const inputId = `col-pref-${
+                        selectedDataset.id
+                      }-${col.replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
+                      return (
+                        <li key={col} className="flex items-center gap-2">
+                          <input
+                            id={inputId}
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleColumnPreference(col)}
+                            className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+                          />
+                          <label
+                            htmlFor={inputId}
+                            className="text-slate-700 dark:text-slate-100"
+                          >
+                            {col}
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+
+              <div className="mt-4 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setColumnPrefsOpen(false)}
+                  className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={saveColumnPreferences}
+                  disabled={columnPrefsSaving}
+                  className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-700 disabled:opacity-60"
+                >
+                  {columnPrefsSaving ? "Saving…" : "Save"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {showHelp && (
           <div className="mb-2 max-h-56 overflow-y-auto rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-xs text-slate-700 shadow-sm dark:border-sky-800 dark:bg-slate-900 dark:text-slate-200">
@@ -1072,29 +1365,34 @@ const ChatWindow = ({ showSql = false }: ChatWindowProps) => {
         </div>
       </div>
 
-      <div className="flex flex-col gap-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-4rem)]">
-        <div className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-sm backdrop-blur dark:border-slate-800/80 dark:bg-slate-800/60">
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-100">
-              Customize View
-            </h3>
-            <span className="text-[11px] uppercase tracking-wide text-slate-400">
-              Pick what you need
-            </span>
+      {customizeOpen && (
+        <div className="flex h-full flex-col gap-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)]">
+          <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-xl shadow-purple-100/70 dark:border-slate-800/80 dark:bg-slate-900/80 dark:shadow-slate-900/60">
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <p className="text-[11px] uppercase tracking-wide text-slate-400">
+                  Customize
+                </p>
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-50">
+                  Filters & View
+                </h3>
+              </div>
+            </div>
+            <div className="mb-4 h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent dark:via-slate-700" />
+            <FilterChips
+              groups={
+                state.status === "needs_filter"
+                  ? state.filterGroups
+                  : filterGroups
+              }
+              applied={appliedFilters}
+              onChange={handleFiltersChange}
+            />
           </div>
-          <FilterChips
-            groups={
-              state.status === "needs_filter"
-                ? state.filterGroups
-                : filterGroups
-            }
-            applied={appliedFilters}
-            onChange={handleFiltersChange}
-          />
-        </div>
 
-        <AppliedFilterBar applied={appliedFilters} onRemove={removeFilter} />
-      </div>
+          <AppliedFilterBar applied={appliedFilters} onRemove={removeFilter} />
+        </div>
+      )}
     </div>
   );
 };

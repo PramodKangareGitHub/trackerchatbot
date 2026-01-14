@@ -9,15 +9,28 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.pinned_question import PinnedQuestion
+from app.services.auth_utils import require_user
+from app.models.user import User
 
-router = APIRouter(prefix="/api/pins", tags=["pins"])
+router = APIRouter(prefix="/api/pins", tags=["pins"], dependencies=[Depends(require_user)])
 
 
-@router.get("/")
-async def list_pins(dataset_id: str = Query(..., description="Dataset identifier"), db: Session = Depends(get_db)) -> Dict[str, Any]:
+@router.get("")
+async def list_pins(
+    dataset_id: str = Query(..., description="Dataset identifier"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_user),
+) -> Dict[str, Any]:
     if not dataset_id:
         raise HTTPException(status_code=400, detail="dataset_id is required")
-    stmt = select(PinnedQuestion).where(PinnedQuestion.dataset_id == dataset_id).order_by(PinnedQuestion.created_at.desc())
+    stmt = (
+        select(PinnedQuestion)
+        .where(
+            PinnedQuestion.dataset_id == dataset_id,
+            PinnedQuestion.user_id == current_user.id,
+        )
+        .order_by(PinnedQuestion.created_at.desc())
+    )
     rows: List[PinnedQuestion] = db.execute(stmt).scalars().all()
     return {
         "status": "ok",
@@ -33,8 +46,12 @@ async def list_pins(dataset_id: str = Query(..., description="Dataset identifier
     }
 
 
-@router.post("/")
-async def add_pin(payload: Dict[str, str], db: Session = Depends(get_db)) -> Dict[str, Any]:
+@router.post("")
+async def add_pin(
+    payload: Dict[str, str],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_user),
+) -> Dict[str, Any]:
     dataset_id = (payload.get("dataset_id") or "").strip()
     question = (payload.get("question") or "").strip()
     if not dataset_id or not question:
@@ -43,6 +60,7 @@ async def add_pin(payload: Dict[str, str], db: Session = Depends(get_db)) -> Dic
     # Deduplicate per dataset
     stmt = select(PinnedQuestion).where(
         PinnedQuestion.dataset_id == dataset_id,
+        PinnedQuestion.user_id == current_user.id,
         PinnedQuestion.question == question,
     )
     existing = db.execute(stmt).scalars().first()
@@ -57,7 +75,12 @@ async def add_pin(payload: Dict[str, str], db: Session = Depends(get_db)) -> Dic
             },
         }
 
-    pin = PinnedQuestion(id=str(uuid.uuid4()), dataset_id=dataset_id, question=question)
+    pin = PinnedQuestion(
+        id=str(uuid.uuid4()),
+        dataset_id=dataset_id,
+        user_id=current_user.id,
+        question=question,
+    )
     db.add(pin)
     db.commit()
     db.refresh(pin)
@@ -73,10 +96,17 @@ async def add_pin(payload: Dict[str, str], db: Session = Depends(get_db)) -> Dic
 
 
 @router.delete("/{pin_id}")
-async def delete_pin(pin_id: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def delete_pin(
+    pin_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_user),
+) -> Dict[str, Any]:
     if not pin_id:
         raise HTTPException(status_code=400, detail="pin_id is required")
-    stmt = delete(PinnedQuestion).where(PinnedQuestion.id == pin_id)
+    stmt = delete(PinnedQuestion).where(
+        PinnedQuestion.id == pin_id,
+        PinnedQuestion.user_id == current_user.id,
+    )
     result = db.execute(stmt)
     db.commit()
     if result.rowcount == 0:

@@ -8,3 +8,7 @@ langchain-core
 langchain-openai
 pydantic
 python-multipart
+passlib[bcrypt]
+PyJWT
+alembic
+email-validator

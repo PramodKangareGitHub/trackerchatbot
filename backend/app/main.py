@@ -5,6 +5,10 @@ from app.routes.admin import router as admin_router
 from app.routes.chat import router as chat_router
 from app.routes.datasets import router as datasets_router
 from app.routes.pins import router as pins_router
+from app.routes.auth import router as auth_router
+from app.db import SessionLocal
+from app.models.user import User
+from app.services.auth_utils import hash_password
 
 
 def create_app() -> FastAPI:
@@ -12,16 +16,30 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173"],
+        allow_origin_regex=r".*",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
+    app.include_router(auth_router)
     app.include_router(datasets_router)
     app.include_router(chat_router)
     app.include_router(pins_router)
     app.include_router(admin_router)
+
+    @app.on_event("startup")
+    def seed_default_admin() -> None:
+        """Create a default admin user if none exists yet."""
+        email = "admin@gmail.com"
+        password = "admin@tracker123"
+        with SessionLocal() as db:
+            existing = db.query(User).filter(User.email == email).first()
+            if existing:
+                return
+            user = User(email=email, password_hash=hash_password(password), role="admin")
+            db.add(user)
+            db.commit()
 
     @app.get("/health")
     async def health() -> dict[str, str]:

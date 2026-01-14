@@ -4,7 +4,7 @@ import re
 import uuid
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -12,9 +12,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import engine, get_db
-from app.services.dataset_registry import create_dataset_entry, get_dataset
+from app.services.dataset_registry import create_dataset_entry, get_dataset, list_datasets
+from app.services.auth_utils import require_user
+from app.models.dataset_column_preference import DatasetColumnPreference
+from app.models.user import User
+from pydantic import BaseModel
 
-router = APIRouter(prefix="/api", tags=["datasets"])
+router = APIRouter(prefix="/api", tags=["datasets"], dependencies=[Depends(require_user)])
 
 
 ALLOWED_EXTENSIONS = {".xlsx", ".xls"}
@@ -39,6 +43,10 @@ def _normalize_columns(columns: list[str]) -> list[str]:
         seen[candidate] = 1
         result.append(candidate)
     return result
+
+
+class ColumnPreferencePayload(BaseModel):
+    columns: List[str]
 
 
 @router.post("/upload")
@@ -93,6 +101,22 @@ async def upload_dataset(
     }
 
 
+@router.get("/datasets")
+async def list_datasets_public(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+        datasets = list_datasets(db=db)
+        return [
+                {
+                    "id": d.id,
+                    "original_file_name": d.original_file_name,
+                    "table_name": d.table_name,
+                    "row_count": d.row_count,
+                    "columns": d.columns_json,
+                    "created_at": d.created_at,
+                }
+                for d in datasets
+        ]
+
+
 @router.get("/datasets/{dataset_id}/preview")
 async def preview_dataset(dataset_id: str) -> dict[str, Any]:
     dataset = get_dataset(dataset_id)
@@ -119,3 +143,74 @@ async def preview_dataset(dataset_id: str) -> dict[str, Any]:
         "preview_rows": preview_rows,
         "preview_count": len(preview_rows),
     }
+
+
+@router.get("/datasets/{dataset_id}/column-preferences")
+async def get_column_preferences(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_user),
+) -> dict[str, Any]:
+    dataset = get_dataset(dataset_id, db)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    allowed_columns = list(dataset.columns_json or [])
+    pref = (
+        db.query(DatasetColumnPreference)
+        .filter(
+            DatasetColumnPreference.dataset_id == dataset_id,
+            DatasetColumnPreference.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if pref and pref.columns_json:
+        selected = [c for c in pref.columns_json if c in allowed_columns]
+    else:
+        selected = list(allowed_columns)
+
+    return {"columns": allowed_columns, "selected": selected}
+
+
+@router.post("/datasets/{dataset_id}/column-preferences")
+async def save_column_preferences(
+    dataset_id: str,
+    payload: ColumnPreferencePayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_user),
+) -> dict[str, Any]:
+    dataset = get_dataset(dataset_id, db)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    allowed_columns = list(dataset.columns_json or [])
+    allowed_set = set(allowed_columns)
+    selected = [c for c in payload.columns if c in allowed_set]
+    if not selected:
+        selected = list(allowed_columns)
+
+    pref = (
+        db.query(DatasetColumnPreference)
+        .filter(
+            DatasetColumnPreference.dataset_id == dataset_id,
+            DatasetColumnPreference.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if pref is None:
+        pref = DatasetColumnPreference(
+            dataset_id=dataset_id,
+            user_id=current_user.id,
+            columns_json=selected,
+        )
+        db.add(pref)
+    else:
+        pref.columns_json = selected
+        db.add(pref)
+
+    db.commit()
+    db.refresh(pref)
+
+    return {"columns": allowed_columns, "selected": selected}
