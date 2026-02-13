@@ -12,6 +12,7 @@ class DashboardWidget(Base):
     id = Column(String(36), primary_key=True, index=True)
     title = Column(String, nullable=False)
     widget_type = Column(String, nullable=True)
+    role = Column(String, nullable=True)
     order_index = Column(Integer, nullable=True)
     config_json = Column(JSON, nullable=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

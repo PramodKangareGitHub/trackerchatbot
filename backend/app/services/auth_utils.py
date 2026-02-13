@@ -22,7 +22,7 @@ http_bearer = HTTPBearer(auto_error=False)
 JWT_SECRET = os.getenv("JWT_SECRET", "super-secret-key")
 JWT_ALG = "HS256"
 JWT_TTL_SECONDS = int(os.getenv("JWT_TTL_SECONDS", "7200"))
-ALLOWED_ROLES = {"viewer", "admin", "developer"}
+ALLOWED_ROLES = {"admin", "developer", "leader", "delivery_manager"}
 
 
 def hash_password(password: str) -> str:

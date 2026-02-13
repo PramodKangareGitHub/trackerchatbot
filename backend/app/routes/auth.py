@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
@@ -34,7 +34,7 @@ class UserOut(BaseModel):
 class RegisterPayload(BaseModel):
     email: EmailStr
     password: str = Field(min_length=6)
-    role: str
+    role: str  # expected: admin, developer, leader, delivery_manager
 
 
 class LoginPayload(BaseModel):
@@ -161,11 +161,30 @@ async def change_password(
     target = db.query(User).filter(User.id == user_id).first()
     if not target:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    if target.role != "viewer":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only viewer passwords can be reset")
+    if target.role not in {"leader", "delivery_manager"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only leader or delivery manager passwords can be reset",
+        )
 
     target.password_hash = hash_password(payload.new_password)
     db.add(target)
     db.commit()
     db.refresh(target)
     return to_user_out(target)
+
+
+@router.delete("/users/{user_id}", status_code=204)
+async def delete_user(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if target.id == current_user.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete your own account")
+    db.delete(target)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

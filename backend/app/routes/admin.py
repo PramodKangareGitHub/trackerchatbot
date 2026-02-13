@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 import io
+import json
 from typing import Any, Dict, List
 
 import pandas as pd
@@ -9,23 +10,38 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import or_, text
 
 from app.db import engine, get_db
 from app.models.dashboard_widget import DashboardWidget
-from app.services.auth_utils import require_admin_or_developer
+from app.models.user import User
+from app.services.auth_utils import ensure_allowed_role, get_current_user, require_admin_or_developer
 from app.services.dataset_registry import (
     delete_all_datasets,
     delete_dataset,
     get_dataset,
     list_datasets,
 )
+from app.services.filter_discovery import fetch_distinct_values
 
 router = APIRouter(
     prefix="/api/admin",
     tags=["admin"],
-    dependencies=[Depends(require_admin_or_developer)],
 )
+
+
+def parse_roles(raw: Any) -> List[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [ensure_allowed_role(r) for r in raw]
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return [ensure_allowed_role(r) for r in data]
+    except Exception:
+        pass
+    return [ensure_allowed_role(str(raw))]
 
 
 class DashboardWidgetPayload(BaseModel):
@@ -33,6 +49,7 @@ class DashboardWidgetPayload(BaseModel):
     title: str
     widget_type: str | None = Field(default=None)
     order_index: int | None = Field(default=None)
+    roles: List[str] | None = Field(default=None)
     config: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -49,16 +66,44 @@ class UpdateRecordPayload(BaseModel):
 
 
 @router.post("/dashboard-config")
-async def set_dashboard_config(payload: DashboardConfigPayload, db: Session = Depends(get_db)) -> Dict[str, Any]:
-    db.query(DashboardWidget).delete()
+async def set_dashboard_config(
+    payload: DashboardConfigPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    user_role = ensure_allowed_role(user.role)
+
+    # Admins/developers can replace the full dashboard; others can only manage their own role's widgets.
+    if user_role in {"admin", "developer"}:
+        db.query(DashboardWidget).delete()
+    else:
+        existing = (
+            db.query(DashboardWidget)
+            .order_by(DashboardWidget.order_index.asc().nulls_last(), DashboardWidget.created_at.asc())
+            .all()
+        )
+        for existing_widget in existing:
+            roles = parse_roles(existing_widget.role)
+            if user_role in roles:
+                db.delete(existing_widget)
+        db.commit()
+
     widgets_out: List[Dict[str, Any]] = []
 
     for widget in payload.widgets:
         wid = widget.id or str(uuid.uuid4())
+        requested_roles = widget.roles or ([user_role] if user_role != "admin" else ["admin"])
+        normalized_roles = [ensure_allowed_role(r) for r in requested_roles]
+        if user_role not in {"admin", "developer"}:
+            # Non-admins can only assign their own role
+            normalized_roles = [user_role]
+        elif not normalized_roles:
+            normalized_roles = ["admin"]
         db_widget = DashboardWidget(
             id=wid,
             title=widget.title,
             widget_type=widget.widget_type,
+            role=json.dumps(normalized_roles),
             order_index=widget.order_index,
             config_json=widget.config,
         )
@@ -68,6 +113,7 @@ async def set_dashboard_config(payload: DashboardConfigPayload, db: Session = De
                 "id": wid,
                 "title": widget.title,
                 "widget_type": widget.widget_type,
+                "roles": normalized_roles,
                 "order_index": widget.order_index,
                 "config": widget.config,
             }
@@ -78,30 +124,48 @@ async def set_dashboard_config(payload: DashboardConfigPayload, db: Session = De
 
 
 @router.get("/dashboard-config")
-async def get_dashboard_config(db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def get_dashboard_config(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    user_role = ensure_allowed_role(user.role)
     widgets = (
         db.query(DashboardWidget)
         .order_by(DashboardWidget.order_index.asc().nulls_last(), DashboardWidget.created_at.asc())
         .all()
     )
+
+    visible_widgets = []
+    for w in widgets:
+        roles = parse_roles(w.role)
+        if user_role != "admin":
+            # Non-admins must be explicitly included in the widget's roles.
+            if not roles or user_role not in roles:
+                continue
+        visible_widgets.append((w, roles))
+
     return {
         "widgets": [
             {
                 "id": w.id,
                 "title": w.title,
                 "widget_type": w.widget_type,
+                "roles": roles,
                 "order_index": w.order_index,
                 "config": w.config_json,
                 "created_at": w.created_at,
                 "updated_at": w.updated_at,
             }
-            for w in widgets
+            for w, roles in visible_widgets
         ]
     }
 
 
 @router.get("/datasets")
-async def admin_list_datasets(db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
+async def admin_list_datasets(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
     datasets = list_datasets(db=db)
     return [
         {
@@ -117,7 +181,11 @@ async def admin_list_datasets(db: Session = Depends(get_db)) -> List[Dict[str, A
 
 
 @router.delete("/datasets/{dataset_id}")
-async def admin_delete_dataset(dataset_id: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def admin_delete_dataset(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin_or_developer),
+) -> Dict[str, Any]:
     deleted = delete_dataset(dataset_id, db=db, drop_table=True)
     if not deleted:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -125,13 +193,21 @@ async def admin_delete_dataset(dataset_id: str, db: Session = Depends(get_db)) -
 
 
 @router.delete("/datasets")
-async def admin_delete_all_datasets(db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def admin_delete_all_datasets(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin_or_developer),
+) -> Dict[str, Any]:
     count = delete_all_datasets(db=db, drop_tables=True)
     return {"deleted_count": count}
 
 
 @router.post("/datasets/{dataset_id}/records")
-async def admin_add_records(dataset_id: str, payload: AddRecordsPayload, db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def admin_add_records(
+    dataset_id: str,
+    payload: AddRecordsPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin_or_developer),
+) -> Dict[str, Any]:
     dataset = get_dataset(dataset_id, db)
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -174,6 +250,7 @@ async def admin_list_records(
     limit: int = 50,
     offset: int = 0,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     dataset = get_dataset(dataset_id, db)
     if dataset is None:
@@ -199,12 +276,36 @@ async def admin_list_records(
     }
 
 
+@router.get("/datasets/{dataset_id}/columns/{column}/values")
+async def admin_distinct_column_values(
+    dataset_id: str,
+    column: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    dataset = get_dataset(dataset_id, db)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    columns = list(dataset.columns_json or [])
+    if column not in columns:
+        raise HTTPException(status_code=400, detail="Column not found in dataset")
+
+    try:
+        values = fetch_distinct_values(dataset.table_name, column, engine=engine)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Failed to fetch distinct values: {exc}") from exc
+
+    return {"column": column, "values": values}
+
+
 @router.put("/datasets/{dataset_id}/records/{rowid}")
 async def admin_update_record(
     dataset_id: str,
     rowid: int,
     payload: UpdateRecordPayload,
     db: Session = Depends(get_db),
+    user: User = Depends(require_admin_or_developer),
 ) -> Dict[str, Any]:
     dataset = get_dataset(dataset_id, db)
     if dataset is None:
@@ -250,7 +351,12 @@ async def admin_update_record(
 
 
 @router.delete("/datasets/{dataset_id}/records/{rowid}")
-async def admin_delete_record(dataset_id: str, rowid: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def admin_delete_record(
+    dataset_id: str,
+    rowid: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin_or_developer),
+) -> Dict[str, Any]:
     dataset = get_dataset(dataset_id, db)
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -277,7 +383,11 @@ async def admin_delete_record(dataset_id: str, rowid: int, db: Session = Depends
 
 
 @router.get("/datasets/{dataset_id}/export")
-async def admin_export_dataset(dataset_id: str, db: Session = Depends(get_db)) -> StreamingResponse:
+async def admin_export_dataset(
+    dataset_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin_or_developer),
+) -> StreamingResponse:
     dataset = get_dataset(dataset_id, db)
     if dataset is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
