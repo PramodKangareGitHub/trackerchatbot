@@ -9,6 +9,14 @@ export type Dataset = {
 
 export type UserRole = "admin" | "developer" | "leader" | "delivery_manager";
 
+export type Dashboard = {
+  id: string;
+  name: string;
+  description?: string | null;
+  widget_count?: number;
+  order_index?: number | null;
+};
+
 export type WidgetType = "table" | "chart";
 
 export type TableConfig = {
@@ -29,6 +37,7 @@ export type ChartConfig = {
 
 export type Widget = {
   id?: string;
+  dashboard_id?: string;
   title: string;
   widget_type?: WidgetType | null;
   order_index?: number | null;

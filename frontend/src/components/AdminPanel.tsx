@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import RecordsSection from "./admin/RecordsSection";
 import UploadSection from "./admin/UploadSection";
 import UserManagementSection from "./admin/UserManagementSection";
 import DatasetManagementSection from "./admin/DatasetManagementSection";
 import DashboardConfigSection from "./admin/DashboardConfigSection";
+import BannerManagementSection from "./admin/BannerManagementSection";
 import type {
   ChartConfig,
+  Dashboard,
   Dataset,
   ManagedUser,
   TableConfig,
@@ -15,8 +17,20 @@ import type {
 } from "./admin/types";
 import { ROLE_OPTIONS } from "./admin/types";
 import ResultTable from "./ResultTable";
+import {
+  BannerConfig,
+  fetchValueCounts,
+  persistBannerConfigs,
+  readStoredBannerConfigs,
+} from "./dashboard/bannerUtils";
 
-type SectionId = "upload" | "datasets" | "records" | "dashboard" | "users";
+type SectionId =
+  | "upload"
+  | "datasets"
+  | "records"
+  | "dashboard"
+  | "banners"
+  | "users";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 const withBase = (path: string) => {
@@ -59,6 +73,12 @@ const AdminPanel = ({
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [recordsPage, setRecordsPage] = useState(0);
   const pageSize = 20;
+  const [dashboards, setDashboards] = useState<Dashboard[]>([]);
+  const [dashboardsLoading, setDashboardsLoading] = useState(false);
+  const [selectedDashboardId, setSelectedDashboardId] = useState<string | null>(
+    null
+  );
+  const [dashboardSaving, setDashboardSaving] = useState(false);
   const [editRowId, setEditRowId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState<Record<string, unknown>>({});
   const [widgets, setWidgets] = useState<Widget[]>([]);
@@ -94,39 +114,45 @@ const AdminPanel = ({
   } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [bannerConfigs, setBannerConfigs] = useState<BannerConfig[]>([]);
 
   const authHeaders = useMemo(
     () => ({ Authorization: `Bearer ${authToken}` }),
     [authToken]
   );
 
-  const authedFetch = async (path: string, options?: RequestInit) => {
-    const headers = { ...(options?.headers || {}), ...authHeaders };
-    return fetch(withBase(path), { ...options, headers });
-  };
+  const authedFetch = useCallback(
+    async (path: string, options?: RequestInit) => {
+      const headers = { ...(options?.headers || {}), ...authHeaders };
+      return fetch(withBase(path), { ...options, headers });
+    },
+    [authHeaders]
+  );
 
-  const api = async <T,>(path: string, options?: RequestInit): Promise<T> => {
-    const res = await authedFetch(path, {
-      headers: {
-        "Content-Type": "application/json",
-        ...(options?.headers || {}),
-      },
-      ...options,
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || res.statusText || "Request failed");
-    }
-    // Handle no-content responses (e.g., DELETE 204) gracefully
-    if (res.status === 204) {
-      return undefined as unknown as T;
-    }
-    const contentLength = res.headers.get("content-length");
-    if (contentLength === "0") {
-      return undefined as unknown as T;
-    }
-    return res.json();
-  };
+  const api = useCallback(
+    async <T,>(path: string, options?: RequestInit): Promise<T> => {
+      const res = await authedFetch(path, {
+        headers: {
+          "Content-Type": "application/json",
+          ...(options?.headers || {}),
+        },
+        ...options,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || res.statusText || "Request failed");
+      }
+      if (res.status === 204) {
+        return undefined as unknown as T;
+      }
+      const contentLength = res.headers.get("content-length");
+      if (contentLength === "0") {
+        return undefined as unknown as T;
+      }
+      return res.json();
+    },
+    [authedFetch]
+  );
 
   const sections: { id: SectionId; label: string; hint?: string }[] =
     useMemo(() => {
@@ -134,7 +160,8 @@ const AdminPanel = ({
         { id: "upload", label: "Upload", hint: "Excel" },
         { id: "datasets", label: "Data Management" },
         { id: "records", label: "Add / Update Records" },
-        { id: "dashboard", label: "Dashboard" },
+        { id: "dashboard", label: "Dashboard Management" },
+        { id: "banners", label: "Banner Management" },
       ];
 
       if (authUserRole === "admin") {
@@ -166,11 +193,46 @@ const AdminPanel = ({
     }
   };
 
-  const loadWidgets = async () => {
+  const loadDashboards = async () => {
+    setDashboardsLoading(true);
+    setError(null);
+    try {
+      const data = await api<{ dashboards: Dashboard[] }>(
+        "/api/admin/dashboards"
+      );
+      const list = data.dashboards || [];
+      setDashboards(list);
+      if (!list.length) {
+        setSelectedDashboardId(null);
+        setWidgets([]);
+        return;
+      }
+      const targetId =
+        userRole === "admin"
+          ? selectedDashboardId &&
+            list.some((d) => d.id === selectedDashboardId)
+            ? selectedDashboardId
+            : list[0].id
+          : list.find((d) => d.id === "home")?.id || null;
+      setSelectedDashboardId(targetId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDashboardsLoading(false);
+    }
+  };
+
+  const loadWidgets = async (dashboardId?: string) => {
     setWidgetsLoading(true);
     try {
+      const targetDashboardId =
+        dashboardId || selectedDashboardId || dashboards[0]?.id || null;
+      if (!targetDashboardId) {
+        setWidgets([]);
+        return;
+      }
       const data = await api<{ widgets: Widget[] }>(
-        "/api/admin/dashboard-config"
+        `/api/admin/dashboard-config?dashboard_id=${encodeURIComponent(targetDashboardId)}`
       );
       const normalized: Widget[] = (data.widgets || []).map((w) => {
         const incomingArray = Array.isArray(w.roles) ? w.roles : [];
@@ -183,13 +245,20 @@ const AdminPanel = ({
               ? safeRoles
               : ["admin"]
             : [userRole];
-        return { ...w, roles: finalRoles };
+        return {
+          ...w,
+          roles: finalRoles,
+          dashboard_id: w.dashboard_id || targetDashboardId,
+        };
       });
       const scoped =
         userRole === "admin"
           ? normalized
           : normalized.filter((w) => (w.roles || []).includes(userRole));
       setWidgets(scoped as Widget[]);
+      if (!selectedDashboardId) {
+        setSelectedDashboardId(targetDashboardId);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -212,8 +281,29 @@ const AdminPanel = ({
 
   useEffect(() => {
     loadDatasets();
-    loadWidgets();
+    loadDashboards();
   }, []);
+
+  useEffect(() => {
+    if (userRole === "admin") return;
+    const home = dashboards.find((d) => d.id === "home");
+    if (home && selectedDashboardId !== home.id) {
+      setSelectedDashboardId(home.id);
+    }
+  }, [dashboards, selectedDashboardId, userRole]);
+
+  useEffect(() => {
+    setBannerConfigs(readStoredBannerConfigs());
+  }, []);
+
+  useEffect(() => {
+    if (selectedDashboardId) {
+      loadWidgets(selectedDashboardId);
+    } else {
+      setWidgets([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDashboardId]);
 
   useEffect(() => {
     if (!sections.find((s) => s.id === activeSection) && sections[0]) {
@@ -468,6 +558,12 @@ const AdminPanel = ({
   const persistWidgets = async (list: Widget[], savingKey: string) => {
     try {
       setSavingWidgetId(savingKey);
+      const dashboardId = selectedDashboardId || dashboards[0]?.id || null;
+      if (!dashboardId) {
+        setError("Create a dashboard first.");
+        return;
+      }
+      const fallbackDatasetId = selectedDatasetId || datasets[0]?.id || "";
       const payloadWidgets = list.map((w) => {
         const nextRoles =
           userRole === "admin"
@@ -475,11 +571,25 @@ const AdminPanel = ({
               ? w.roles
               : ["admin"]
             : [userRole];
-        return { ...w, roles: nextRoles };
+        const baseConfig =
+          w.widget_type === "chart" ? getChartConfig(w) : getTableConfig(w);
+        const normalizedConfig = {
+          ...baseConfig,
+          dataset_id: baseConfig.dataset_id || fallbackDatasetId,
+        };
+        return {
+          ...w,
+          roles: nextRoles,
+          config: normalizedConfig,
+          dashboard_id: dashboardId,
+        };
       });
       await api(`/api/admin/dashboard-config`, {
         method: "POST",
-        body: JSON.stringify({ widgets: payloadWidgets }),
+        body: JSON.stringify({
+          widgets: payloadWidgets,
+          dashboard_id: dashboardId,
+        }),
       });
       await loadWidgets();
       setEditingWidgetId(null);
@@ -489,6 +599,42 @@ const AdminPanel = ({
       setSavingWidgetId(null);
     }
   };
+
+  const updateBannerConfigs = useCallback(
+    (updater: (prev: BannerConfig[]) => BannerConfig[]) => {
+      setBannerConfigs((prev) => {
+        const next = updater(prev);
+        persistBannerConfigs(next);
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new Event("banner-configs-changed"));
+        }
+        return next;
+      });
+    },
+    []
+  );
+
+  const handleSaveBannerConfig = useCallback(
+    (config: BannerConfig) => {
+      updateBannerConfigs((prev) => {
+        const existingIdx = prev.findIndex((b) => b.id === config.id);
+        if (existingIdx !== -1) {
+          const next = [...prev];
+          next[existingIdx] = config;
+          return next;
+        }
+        return [...prev, config];
+      });
+    },
+    [updateBannerConfigs]
+  );
+
+  const handleDeleteBannerConfig = useCallback(
+    (bannerId: string) => {
+      updateBannerConfigs((prev) => prev.filter((b) => b.id !== bannerId));
+    },
+    [updateBannerConfigs]
+  );
 
   const handleSaveWidget = async (widgetKey: string) => {
     await persistWidgets(widgets, widgetKey);
@@ -551,7 +697,28 @@ const AdminPanel = ({
           column
         )}/values`
       );
-      const values = data?.values || [];
+      const rawValues = data?.values || [];
+
+      const normalize = (s: string) =>
+        s.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+      const isAgeing = normalize(column) === "ageing_as_on_today";
+
+      const bucketAgeing = (vals: string[]) => {
+        const buckets = new Set<string>();
+        vals.forEach((v) => {
+          const n = Number(v);
+          if (!Number.isFinite(n)) return;
+          if (n <= 30) buckets.add("0-30");
+          else if (n <= 60) buckets.add("30-60");
+          else if (n <= 90) buckets.add("60-90");
+          else buckets.add("90+");
+        });
+        const order = ["0-30", "30-60", "60-90", "90+"];
+        return order.filter((b) => buckets.has(b));
+      };
+
+      const values = isAgeing ? bucketAgeing(rawValues) : rawValues;
+
       setGroupValueOptions((prev) => ({ ...prev, [key]: values }));
       onValues(values);
     } catch (err) {
@@ -600,8 +767,36 @@ const AdminPanel = ({
     });
   }, [widgets, groupValueOptions, groupValueLoading]);
 
+  const loadBannerColumnValues = useCallback(
+    async (datasetId: string, column: string) => {
+      const data = await api<{ values: string[] }>(
+        `/api/admin/datasets/${datasetId}/columns/${encodeURIComponent(
+          column
+        )}/values`
+      );
+      return data.values || [];
+    },
+    [api]
+  );
+
+  const loadBannerValueCounts = useCallback(
+    async (datasetId: string, column: string, selectedValues?: string[]) =>
+      fetchValueCounts({
+        apiBase: API_BASE,
+        authToken,
+        datasetId,
+        column,
+        allowedValues: selectedValues,
+      }),
+    [authToken]
+  );
+
   const addWidget = (widgetType: WidgetType) => {
-    const defaultDataset = datasets[0]?.id || "";
+    const defaultDataset = selectedDatasetId || datasets[0]?.id || "";
+    const activeDashboard =
+      userRole === "admin"
+        ? selectedDashboardId || dashboards[0]?.id || "default"
+        : "home";
     const uid =
       typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
@@ -628,6 +823,7 @@ const AdminPanel = ({
       ...prev,
       {
         id: uid,
+        dashboard_id: activeDashboard,
         title: widgetType === "table" ? "Table Widget" : "Chart Widget",
         widget_type: widgetType,
         order_index: prev.length,
@@ -637,6 +833,116 @@ const AdminPanel = ({
     ]);
     setPreviewWidgetId((prevId) => prevId || uid);
     setEditingWidgetId(uid);
+  };
+
+  const handleCreateDashboard = async (name: string, description?: string) => {
+    if (userRole !== "admin") {
+      setError("Only admins can create dashboards.");
+      return;
+    }
+    if (!name.trim()) {
+      setError("Dashboard name is required.");
+      return;
+    }
+    setDashboardSaving(true);
+    setError(null);
+    try {
+      const created = await api<Dashboard>("/api/admin/dashboards", {
+        method: "POST",
+        body: JSON.stringify({
+          name: name.trim(),
+          description: description || "",
+        }),
+      });
+      await loadDashboards();
+      setSelectedDashboardId(created.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDashboardSaving(false);
+    }
+  };
+
+  const handleUpdateDashboard = async (
+    id: string,
+    name: string,
+    description?: string
+  ) => {
+    if (userRole !== "admin") return;
+    if (!id) return;
+    if (!name.trim()) {
+      setError("Dashboard name is required.");
+      return;
+    }
+    setDashboardSaving(true);
+    setError(null);
+    try {
+      await api(`/api/admin/dashboards/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: name.trim(),
+          description: description || "",
+        }),
+      });
+      await loadDashboards();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDashboardSaving(false);
+    }
+  };
+
+  const handleDeleteDashboard = async (id: string) => {
+    if (userRole !== "admin") return;
+    if (!id) return;
+    setDashboardSaving(true);
+    setError(null);
+    try {
+      await api(`/api/admin/dashboards/${id}`, { method: "DELETE" });
+      await loadDashboards();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDashboardSaving(false);
+    }
+  };
+
+  const handleReorderDashboard = async (
+    dashboardId: string,
+    direction: "up" | "down"
+  ) => {
+    if (userRole !== "admin") return;
+    if (!dashboardId) return;
+    setDashboardSaving(true);
+    setError(null);
+    const current = [...dashboards];
+    const idx = current.findIndex((d) => d.id === dashboardId);
+    const targetIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (idx === -1 || targetIdx < 0 || targetIdx >= current.length) {
+      setDashboardSaving(false);
+      return;
+    }
+
+    const reordered = [...current];
+    [reordered[idx], reordered[targetIdx]] = [
+      reordered[targetIdx],
+      reordered[idx],
+    ];
+    const orderPayload = reordered.map((d) => d.id);
+
+    try {
+      await api("/api/admin/dashboards/reorder", {
+        method: "POST",
+        body: JSON.stringify({ order: orderPayload }),
+      });
+      setDashboards(reordered);
+      setSelectedDashboardId(dashboardId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      await loadDashboards();
+    } finally {
+      setDashboardSaving(false);
+    }
   };
 
   const handleAddWidgetClick = () => {
@@ -803,6 +1109,26 @@ const AdminPanel = ({
             onDeleteUser={handleDeleteUser}
           />
         );
+      case "banners":
+        return (
+          <BannerManagementSection
+            dashboards={
+              userRole === "admin"
+                ? dashboards
+                : dashboards.filter((d) => d.id === "home")
+            }
+            selectedDashboardId={
+              userRole === "admin" ? selectedDashboardId : "home"
+            }
+            datasets={datasets}
+            bannerConfigs={bannerConfigs}
+            onSaveBanner={handleSaveBannerConfig}
+            onDeleteBanner={handleDeleteBannerConfig}
+            loadColumnValues={loadBannerColumnValues}
+            loadValueCounts={loadBannerValueCounts}
+            userRole={userRole}
+          />
+        );
       case "dashboard":
       default:
         return (
@@ -812,6 +1138,21 @@ const AdminPanel = ({
             widgetsLoading={widgetsLoading}
             groupValueOptions={groupValueOptions}
             groupValueLoading={groupValueLoading}
+            dashboards={
+              userRole === "admin"
+                ? dashboards
+                : dashboards.filter((d) => d.id === "home")
+            }
+            dashboardsLoading={dashboardsLoading}
+            selectedDashboardId={
+              userRole === "admin" ? selectedDashboardId : "home"
+            }
+            onSelectDashboard={setSelectedDashboardId}
+            onReorderDashboard={handleReorderDashboard}
+            onCreateDashboard={handleCreateDashboard}
+            onUpdateDashboard={handleUpdateDashboard}
+            onDeleteDashboard={handleDeleteDashboard}
+            dashboardSaving={dashboardSaving}
             editingWidgetId={editingWidgetId}
             savingWidgetId={savingWidgetId}
             showWidgetTypePicker={showWidgetTypePicker}
@@ -826,6 +1167,8 @@ const AdminPanel = ({
             previewLoading={previewLoading}
             previewError={previewError}
             userRole={userRole}
+            selectedDatasetId={selectedDatasetId}
+            onSelectDataset={setSelectedDatasetId}
             onAddWidgetClick={handleAddWidgetClick}
             confirmAddWidget={confirmAddWidget}
             updateWidget={updateWidget}

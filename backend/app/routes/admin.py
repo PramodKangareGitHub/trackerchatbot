@@ -3,16 +3,17 @@ from __future__ import annotations
 import uuid
 import io
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, text
+from sqlalchemy import func, or_, text
 
 from app.db import engine, get_db
+from app.models.dashboard import Dashboard
 from app.models.dashboard_widget import DashboardWidget
 from app.models.user import User
 from app.services.auth_utils import ensure_allowed_role, get_current_user, require_admin_or_developer
@@ -28,6 +29,9 @@ router = APIRouter(
     prefix="/api/admin",
     tags=["admin"],
 )
+
+HOME_DASHBOARD_ID = "home"
+HOME_DASHBOARD_NAME = "Home"
 
 
 def parse_roles(raw: Any) -> List[str]:
@@ -54,7 +58,241 @@ class DashboardWidgetPayload(BaseModel):
 
 
 class DashboardConfigPayload(BaseModel):
+    dashboard_id: str | None = Field(default=None)
     widgets: List[DashboardWidgetPayload] = Field(default_factory=list)
+
+
+class DashboardCreatePayload(BaseModel):
+    name: str = Field(..., min_length=1)
+    description: str | None = Field(default=None)
+
+
+class DashboardUpdatePayload(BaseModel):
+    name: str | None = Field(default=None)
+    description: str | None = Field(default=None)
+    order_index: int | None = Field(default=None)
+
+
+class DashboardReorderPayload(BaseModel):
+    order: List[str] = Field(default_factory=list)
+
+
+def get_or_create_dashboard(
+    db: Session, dashboard_id: Optional[str] = None, name: Optional[str] = None
+) -> Dashboard:
+    # Always ensure the Home dashboard exists for callers relying on defaults.
+    home = db.query(Dashboard).filter(Dashboard.id == HOME_DASHBOARD_ID).first()
+    if not home:
+        lowest = db.query(func.min(Dashboard.order_index)).scalar()
+        home_index = lowest if lowest is not None else 0
+        home = Dashboard(id=HOME_DASHBOARD_ID, name=HOME_DASHBOARD_NAME, order_index=home_index)
+        db.add(home)
+        db.commit()
+        db.refresh(home)
+
+    dash: Optional[Dashboard]
+    if dashboard_id:
+        dash = db.query(Dashboard).filter(Dashboard.id == dashboard_id).first()
+        if dash:
+            return dash
+        dash = Dashboard(id=dashboard_id, name=name or "Dashboard")
+        db.add(dash)
+        db.commit()
+        db.refresh(dash)
+        return dash
+
+    dash = (
+        db.query(Dashboard)
+        .order_by(Dashboard.created_at.asc())
+        .first()
+    )
+    if dash:
+        return dash
+
+    default_dash = Dashboard(id="default", name="Default Dashboard")
+    db.add(default_dash)
+    db.commit()
+    db.refresh(default_dash)
+    return default_dash
+
+
+@router.get("/dashboards")
+async def list_dashboards(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    ensure_allowed_role(user.role)
+    dashboards = (
+        db.query(Dashboard)
+        .order_by(
+            Dashboard.order_index.asc().nulls_last(),
+            Dashboard.created_at.asc(),
+        )
+        .all()
+    )
+
+    # Guarantee Home exists and is visible to all users.
+    home = db.query(Dashboard).filter(Dashboard.id == HOME_DASHBOARD_ID).first()
+    if not home:
+        home = get_or_create_dashboard(db, HOME_DASHBOARD_ID, HOME_DASHBOARD_NAME)
+        dashboards = [home] + dashboards
+
+    user_role = ensure_allowed_role(user.role)
+    if user_role not in {"admin", "developer"}:
+        # Non-admins see Home plus any dashboards that contain at least one widget with their role.
+        allowed_ids = {HOME_DASHBOARD_ID}
+        widgets = (
+            db.query(DashboardWidget.dashboard_id, DashboardWidget.role)
+            .all()
+        )
+        for dash_id, role_json in widgets:
+            roles = parse_roles(role_json)
+            if user_role in roles:
+                allowed_ids.add(dash_id)
+
+        dashboards = [d for d in dashboards if d.id in allowed_ids]
+    counts = dict(
+        db.query(DashboardWidget.dashboard_id, func.count())
+        .group_by(DashboardWidget.dashboard_id)
+        .all()
+    )
+    return {
+        "dashboards": [
+          {
+            "id": d.id,
+            "name": d.name,
+            "description": d.description,
+                        "created_at": d.created_at,
+                        "updated_at": d.updated_at,
+                        "order_index": d.order_index,
+            "widget_count": counts.get(d.id, 0),
+          }
+          for d in dashboards
+        ]
+    }
+
+
+@router.post("/dashboards")
+async def create_dashboard(
+    payload: DashboardCreatePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin_or_developer),
+) -> Dict[str, Any]:
+    ensure_allowed_role(user.role)
+    dash_id = str(uuid.uuid4())
+    max_order = db.query(func.max(Dashboard.order_index)).scalar()
+    next_order = (max_order or -1) + 1
+
+    dashboard = Dashboard(
+        id=dash_id,
+        name=payload.name.strip(),
+        description=(payload.description or "").strip() or None,
+        order_index=next_order,
+    )
+    db.add(dashboard)
+    db.commit()
+    db.refresh(dashboard)
+    return {
+        "id": dashboard.id,
+        "name": dashboard.name,
+        "description": dashboard.description,
+        "created_at": dashboard.created_at,
+        "updated_at": dashboard.updated_at,
+        "order_index": dashboard.order_index,
+    }
+
+
+@router.patch("/dashboards/{dashboard_id}")
+async def update_dashboard(
+    dashboard_id: str,
+    payload: DashboardUpdatePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin_or_developer),
+) -> Dict[str, Any]:
+    ensure_allowed_role(user.role)
+    dashboard = (
+        db.query(Dashboard).filter(Dashboard.id == dashboard_id).first()
+    )
+    if not dashboard:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    if payload.name:
+        dashboard.name = payload.name.strip()
+    if payload.description is not None:
+        dashboard.description = payload.description.strip() or None
+    if payload.order_index is not None:
+        dashboard.order_index = payload.order_index
+    db.commit()
+    db.refresh(dashboard)
+    return {
+        "id": dashboard.id,
+        "name": dashboard.name,
+        "description": dashboard.description,
+        "created_at": dashboard.created_at,
+        "updated_at": dashboard.updated_at,
+        "order_index": dashboard.order_index,
+    }
+
+
+@router.post("/dashboards/reorder")
+async def reorder_dashboards(
+    payload: DashboardReorderPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin_or_developer),
+) -> Dict[str, Any]:
+    ensure_allowed_role(user.role)
+    if not payload.order:
+        return {"ok": True, "updated": 0}
+
+    # Home should always remain; if missing, recreate it and keep it pinned to the top.
+    home = get_or_create_dashboard(db, HOME_DASHBOARD_ID, HOME_DASHBOARD_NAME)
+    if HOME_DASHBOARD_ID not in payload.order:
+        payload.order = [HOME_DASHBOARD_ID] + payload.order
+
+    current = (
+        db.query(Dashboard)
+        .order_by(
+            Dashboard.order_index.asc().nulls_last(),
+            Dashboard.created_at.asc(),
+        )
+        .all()
+    )
+
+    order_map = {dash_id: idx for idx, dash_id in enumerate(payload.order)}
+    next_index = len(order_map)
+
+    updated = 0
+    for dash in current:
+        if dash.id in order_map:
+            dash.order_index = order_map[dash.id]
+            updated += 1
+        else:
+            dash.order_index = next_index
+            next_index += 1
+            updated += 1
+
+    db.commit()
+    return {"ok": True, "updated": updated}
+
+
+@router.delete("/dashboards/{dashboard_id}")
+async def delete_dashboard(
+    dashboard_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin_or_developer),
+) -> Dict[str, Any]:
+    ensure_allowed_role(user.role)
+    if dashboard_id == HOME_DASHBOARD_ID:
+        raise HTTPException(status_code=400, detail="Home dashboard cannot be deleted")
+    dashboard = (
+        db.query(Dashboard).filter(Dashboard.id == dashboard_id).first()
+    )
+    if not dashboard:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    # Remove widgets attached to this dashboard
+    db.query(DashboardWidget).filter(DashboardWidget.dashboard_id == dashboard_id).delete()
+    db.delete(dashboard)
+    db.commit()
+    return {"ok": True}
 
 
 class AddRecordsPayload(BaseModel):
@@ -73,12 +311,21 @@ async def set_dashboard_config(
 ) -> Dict[str, Any]:
     user_role = ensure_allowed_role(user.role)
 
-    # Admins/developers can replace the full dashboard; others can only manage their own role's widgets.
     if user_role in {"admin", "developer"}:
-        db.query(DashboardWidget).delete()
+        dashboard = get_or_create_dashboard(db, payload.dashboard_id)
+    else:
+        # Non-admins always operate on Home.
+        dashboard = get_or_create_dashboard(db, HOME_DASHBOARD_ID, HOME_DASHBOARD_NAME)
+
+    # Admins/developers can replace the dashboard's widgets; others can only manage their own role's widgets for that dashboard.
+    if user_role in {"admin", "developer"}:
+        db.query(DashboardWidget).filter(
+            DashboardWidget.dashboard_id == dashboard.id
+        ).delete()
     else:
         existing = (
             db.query(DashboardWidget)
+            .filter(DashboardWidget.dashboard_id == dashboard.id)
             .order_by(DashboardWidget.order_index.asc().nulls_last(), DashboardWidget.created_at.asc())
             .all()
         )
@@ -101,6 +348,7 @@ async def set_dashboard_config(
             normalized_roles = ["admin"]
         db_widget = DashboardWidget(
             id=wid,
+            dashboard_id=dashboard.id,
             title=widget.title,
             widget_type=widget.widget_type,
             role=json.dumps(normalized_roles),
@@ -111,6 +359,7 @@ async def set_dashboard_config(
         widgets_out.append(
             {
                 "id": wid,
+                "dashboard_id": dashboard.id,
                 "title": widget.title,
                 "widget_type": widget.widget_type,
                 "roles": normalized_roles,
@@ -120,17 +369,42 @@ async def set_dashboard_config(
         )
 
     db.commit()
-    return {"widgets": widgets_out}
+    return {"widgets": widgets_out, "dashboard_id": dashboard.id}
 
 
 @router.get("/dashboard-config")
 async def get_dashboard_config(
+    dashboard_id: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     user_role = ensure_allowed_role(user.role)
+    if user_role in {"admin", "developer"}:
+        dashboard = get_or_create_dashboard(db, dashboard_id)
+    else:
+        # Non-admins can view Home, or any dashboard that contains a widget scoped to their role.
+        target_dashboard_id = HOME_DASHBOARD_ID
+        if dashboard_id and dashboard_id != HOME_DASHBOARD_ID:
+            candidate = (
+                db.query(Dashboard).filter(Dashboard.id == dashboard_id).first()
+            )
+            if candidate:
+                candidate_widgets = (
+                    db.query(DashboardWidget)
+                    .filter(DashboardWidget.dashboard_id == candidate.id)
+                    .all()
+                )
+                if any(user_role in parse_roles(w.role) for w in candidate_widgets):
+                    target_dashboard_id = candidate.id
+
+        dashboard = get_or_create_dashboard(
+            db,
+            target_dashboard_id,
+            HOME_DASHBOARD_NAME if target_dashboard_id == HOME_DASHBOARD_ID else None,
+        )
     widgets = (
         db.query(DashboardWidget)
+        .filter(DashboardWidget.dashboard_id == dashboard.id)
         .order_by(DashboardWidget.order_index.asc().nulls_last(), DashboardWidget.created_at.asc())
         .all()
     )
@@ -145,9 +419,11 @@ async def get_dashboard_config(
         visible_widgets.append((w, roles))
 
     return {
+        "dashboard_id": dashboard.id,
         "widgets": [
             {
                 "id": w.id,
+                "dashboard_id": w.dashboard_id,
                 "title": w.title,
                 "widget_type": w.widget_type,
                 "roles": roles,
@@ -157,7 +433,7 @@ async def get_dashboard_config(
                 "updated_at": w.updated_at,
             }
             for w, roles in visible_widgets
-        ]
+        ],
     }
 
 

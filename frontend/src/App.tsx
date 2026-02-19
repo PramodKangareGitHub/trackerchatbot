@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import AdminPanel from "./components/AdminPanel";
 import ChatWithDashboard from "./components/dashboard/ChatWithDashboard";
+import ChatWindow from "./components/ChatWindow";
 
 type AuthUser = {
   id: string;
@@ -42,6 +43,7 @@ const App = () => {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
+  const [showFloatingChat, setShowFloatingChat] = useState(false);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -163,14 +165,13 @@ const App = () => {
   }, [apiBase]);
 
   const isAuthed = Boolean(authToken && authUser);
-
   if (!isAuthed) {
     return (
       <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors duration-200 dark:bg-slate-900 dark:text-slate-100">
         <div className="flex min-h-screen items-center justify-center px-4">
           <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <h1 className="mb-1 flex items-center gap-2 text-2xl font-semibold text-sky-600">
-              <span aria-hidden>🤖</span> Tracker Chatbot
+              <span aria-hidden>🤖</span> UHG Talent Vista
             </h1>
             <p className="text-sm text-slate-500 dark:text-slate-400">
               Please log in to continue.
@@ -234,13 +235,13 @@ const App = () => {
         <header className="flex items-center justify-between gap-4">
           <div>
             <h1 className="flex items-center gap-3 text-4xl font-semibold text-sky-600">
-              <span aria-hidden className="text-3xl" title="Tracker Chatbot">
+              <span aria-hidden className="text-3xl" title="UHG Talent Vista">
                 🤖
               </span>
-              Tracker Chatbot
+              UHG Talent Vista
             </h1>
             <p className="text-sm text-slate-500 dark:text-slate-400">
-              Smart conversations over your tracking sheets
+              &nbsp;&nbsp;One View. Total Workforce Clarity.
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -253,7 +254,7 @@ const App = () => {
                 }`}
               >
                 <span aria-hidden>💬</span>
-                Chat View
+                Dashboard View
               </button>
               <button
                 type="button"
@@ -311,6 +312,7 @@ const App = () => {
               key="viewer"
               authToken={authToken}
               authUserRole={authUser?.role}
+              hideChat
             />
           )}
 
@@ -320,13 +322,14 @@ const App = () => {
                 key="leader-admin"
                 authToken={authToken!}
                 authUserRole={authUser.role}
-                allowedSections={["dashboard"]}
+                allowedSections={["dashboard", "banners"]}
               />
             ) : (
               <ChatWithDashboard
                 key="leader-chat"
                 authToken={authToken}
                 authUserRole={authUser.role}
+                hideChat
               />
             ))}
 
@@ -342,6 +345,7 @@ const App = () => {
                 key={`admin-${roleView}`}
                 authToken={authToken}
                 authUserRole={authUser.role}
+                hideChat
               />
             ))}
 
@@ -355,13 +359,54 @@ const App = () => {
             ) : (
               <ChatWithDashboard
                 key={`developer-${roleView}`}
-                showSql
                 authToken={authToken}
                 authUserRole={authUser.role}
+                hideChat
               />
             ))}
         </main>
       </div>
+
+      {/* Floating chat launcher */}
+      <button
+        type="button"
+        onClick={() => setShowFloatingChat(true)}
+        className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-sky-600 text-2xl text-white shadow-xl transition hover:scale-105 hover:bg-sky-700 focus:outline-none focus:ring-4 focus:ring-sky-200 dark:bg-sky-500 dark:hover:bg-sky-400 dark:focus:ring-sky-800"
+        aria-label="Open chat"
+      >
+        💬
+      </button>
+
+      {showFloatingChat && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-slate-900/30"
+            onClick={() => setShowFloatingChat(false)}
+          />
+          <div className="fixed bottom-6 right-6 z-50 w-[90vw] max-w-6xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+            <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100">
+              <span>Chat</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowFloatingChat(false)}
+                  className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="h-[70vh] overflow-hidden bg-white dark:bg-slate-900">
+              <ChatWindow
+                key="floating-chat"
+                authToken={authToken}
+                showSql={isDeveloper}
+                heightClass="h-full max-h-full"
+              />
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 };

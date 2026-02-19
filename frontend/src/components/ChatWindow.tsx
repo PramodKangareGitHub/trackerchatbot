@@ -68,9 +68,14 @@ const withBase = (path: string) => {
 type ChatWindowProps = {
   showSql?: boolean;
   authToken?: string | null;
+  heightClass?: string;
 };
 
-const ChatWindow = ({ showSql = false, authToken }: ChatWindowProps) => {
+const ChatWindow = ({
+  showSql = false,
+  authToken,
+  heightClass = "h-[85vh] max-h-[85vh]",
+}: ChatWindowProps) => {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [state, setState] = useState<ChatState>({ status: "idle" });
@@ -426,7 +431,15 @@ const ChatWindow = ({ showSql = false, authToken }: ChatWindowProps) => {
         .replace(/[^a-z0-9]+/g, "_")
         .trim();
     const allowedByCanon = new Map<string, string>();
-    allowed.forEach((f) => allowedByCanon.set(canon(f.column), f.column));
+    if (allowed.length) {
+      allowed.forEach((f) => allowedByCanon.set(canon(f.column), f.column));
+    }
+
+    const columnsByCanon = new Map<string, string>();
+    cols.forEach((col) => {
+      if (/count/i.test(col)) return;
+      columnsByCanon.set(canon(col), col);
+    });
     const next: AppliedFilters = {};
     cols.forEach((col) => {
       if (/count/i.test(col)) return;
@@ -441,7 +454,10 @@ const ChatWindow = ({ showSql = false, authToken }: ChatWindowProps) => {
       }
       const targetCanon = canon(targetCol);
       // Map ageing bucket drill to underlying ageing column with range encoding
-      if (!allowedByCanon.has(targetCanon)) return;
+      const canonicalColumn =
+        allowedByCanon.get(targetCanon) || columnsByCanon.get(targetCanon);
+      if (!canonicalColumn) return;
+      targetCol = canonicalColumn;
       const value = row[col];
       const trimmed =
         value === null || value === undefined ? "" : String(value).trim();
@@ -477,16 +493,26 @@ const ChatWindow = ({ showSql = false, authToken }: ChatWindowProps) => {
 
   const buildStatusFiltersFromQuestion = (
     questionText: string,
-    allowed: FilterOption[]
+    allowed: FilterOption[],
+    cols: string[]
   ): AppliedFilters => {
     const lower = questionText.toLowerCase();
-    const statusCol = allowed.find(
-      (g) => g.column.toLowerCase() === "status"
-    )?.column;
-    if (!statusCol) return {};
+    const statusCol =
+      allowed.find((g) => g.column.toLowerCase() === "status")?.column ||
+      cols.find((c) => c.toLowerCase() === "status") ||
+      "status"; // default to status even if not in columns list
 
     let statusValue: string | null = null;
-    if (lower.includes("open position")) statusValue = "In-Progress";
+    if (
+      lower.includes("open position") ||
+      lower.includes("open demand") ||
+      lower.includes("open demands") ||
+      lower.includes("in-progress") ||
+      lower.includes("in progress") ||
+      /\bopen\b/.test(lower)
+    ) {
+      statusValue = "In-Progress";
+    }
     if (lower.includes("halted")) statusValue = "Halted";
     if (!statusValue) return {};
 
@@ -497,10 +523,27 @@ const ChatWindow = ({ showSql = false, authToken }: ChatWindowProps) => {
     questionText: string,
     allowed: FilterOption[]
   ): AppliedFilters => {
-    const match = questionText.match(/([A-Za-z0-9 _.-]+)\s*=\s*([^?]+)/);
-    if (!match) return {};
-    const rawCol = match[1]?.trim();
-    const rawVals = match[2]?.trim();
+    let preserveRaw = false;
+    let rawCol: string | undefined;
+    let rawVals: string | undefined;
+
+    const matchEq = questionText.match(/([A-Za-z0-9 _.-]+)\s*=\s*([^?]+)/);
+    if (matchEq) {
+      rawCol = matchEq[1]?.trim();
+      rawVals = matchEq[2]?.trim();
+    }
+
+    if (!rawCol || !rawVals) {
+      const matchIsQuoted = questionText.match(
+        /where\s+([A-Za-z0-9 _.-]+)\s+(?:is|equals?|equal to)\s+["']([^"']+)["']/i
+      );
+      if (matchIsQuoted) {
+        rawCol = matchIsQuoted[1]?.trim();
+        rawVals = matchIsQuoted[2]?.trim();
+        preserveRaw = true;
+      }
+    }
+
     if (!rawCol || !rawVals) return {};
 
     const norm = (s: string) =>
@@ -513,10 +556,12 @@ const ChatWindow = ({ showSql = false, authToken }: ChatWindowProps) => {
       allowed.find((g) => norm(g.column) === colLower)?.column ||
       allowed.find((g) => norm(g.column).includes(colLower))?.column;
 
-    const tokens = rawVals
-      .split(/[\/,&]|\bor\b|\band\b/i)
-      .map((v) => v.trim())
-      .filter(Boolean);
+    const tokens = preserveRaw
+      ? [rawVals]
+      : rawVals
+          .split(/[\/,&]|\bor\b|\band\b/i)
+          .map((v) => v.trim())
+          .filter(Boolean);
     if (!tokens.length) return {};
 
     // If direct column match fails, try matching by value tokens
@@ -849,14 +894,13 @@ const ChatWindow = ({ showSql = false, authToken }: ChatWindowProps) => {
       }
     }
 
-    if (!Object.keys(drillFilters).length) {
-      const statusGuess = buildStatusFiltersFromQuestion(
-        lastQuestion || input || "",
-        filterGroups || []
-      );
-      if (Object.keys(statusGuess).length) {
-        drillFilters = statusGuess;
-      }
+    const statusGuess = buildStatusFiltersFromQuestion(
+      lastQuestion || input || "",
+      filterGroups || [],
+      cols
+    );
+    if (Object.keys(statusGuess).length) {
+      drillFilters = { ...drillFilters, ...statusGuess };
     }
 
     // Enforce status only when the current filter groups include it (avoid re-adding on fresh bucket drills)
@@ -954,7 +998,6 @@ const ChatWindow = ({ showSql = false, authToken }: ChatWindowProps) => {
       if (data.filter_groups && data.filter_groups.length) {
         setFilterGroups(data.filter_groups);
       }
-      setAppliedFilters(drillFilters);
       setState({
         status: "ready",
         sql: data.sql,
@@ -989,7 +1032,7 @@ const ChatWindow = ({ showSql = false, authToken }: ChatWindowProps) => {
   };
 
   return (
-    <div className={`relative grid h-[85vh] max-h-[85vh] gap-6 ${gridCols}`}>
+    <div className={`relative grid ${heightClass} gap-6 ${gridCols}`}>
       <button
         type="button"
         aria-label={
