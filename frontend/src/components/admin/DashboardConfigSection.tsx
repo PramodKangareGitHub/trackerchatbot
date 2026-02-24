@@ -14,7 +14,6 @@ import type {
   Widget,
   WidgetType,
 } from "./types";
-import { ROLE_OPTIONS } from "./types";
 import PreviewChart from "./DashboardManagement/PreviewChart";
 import DashboardSelectorActions from "./DashboardManagement/DashboardSelectorActions";
 import WidgetTypePicker from "./DashboardManagement/WidgetTypePicker";
@@ -58,6 +57,7 @@ type DashboardConfigSectionProps = {
   previewLoading: boolean;
   previewError: string | null;
   userRole: UserRole;
+  roleOptions: string[];
   onSelectDataset: (datasetId: string) => void;
   onAddWidgetClick: () => void;
   confirmAddWidget: () => void;
@@ -112,6 +112,7 @@ const DashboardConfigSection = ({
   previewLoading,
   previewError,
   userRole,
+  roleOptions,
   onSelectDataset,
   onAddWidgetClick,
   confirmAddWidget,
@@ -421,35 +422,44 @@ const DashboardConfigSection = ({
                       />
                       {userRole === "admin" ? (
                         <div className="flex flex-wrap items-center gap-2 text-xs">
-                          {ROLE_OPTIONS.map((role) => {
-                            const checked = w.roles?.includes(role);
-                            return (
-                              <label
-                                key={role}
-                                className={`flex items-center gap-1 rounded-full border px-3 py-1 font-semibold shadow-sm transition ${
-                                  checked
-                                    ? "border-sky-500 bg-sky-50 text-sky-700 dark:border-sky-400 dark:bg-sky-900/30 dark:text-sky-100"
-                                    : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                                }`}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => {
-                                    const current = w.roles || [];
-                                    const next = checked
-                                      ? current.filter((r) => r !== role)
-                                      : [...current, role];
-                                    updateWidget(idx, {
-                                      roles: next.length ? next : ["admin"],
-                                    });
-                                  }}
-                                  disabled={!isEditing}
-                                />
-                                {role.replace(/_/g, " ")}
-                              </label>
-                            );
-                          })}
+                          {(roleOptions.length ? roleOptions : []).map(
+                            (role) => {
+                              const checked = (w.roles || []).includes(role);
+                              return (
+                                <label
+                                  key={role}
+                                  className={`flex items-center gap-1 rounded-full border px-3 py-1 font-semibold shadow-sm transition ${
+                                    checked
+                                      ? "border-sky-500 bg-sky-50 text-sky-700 dark:border-sky-400 dark:bg-sky-900/30 dark:text-sky-100"
+                                      : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => {
+                                      const current = w.roles || [];
+                                      const next = checked
+                                        ? current.filter((r) => r !== role)
+                                        : [...current, role];
+                                      updateWidget(idx, {
+                                        roles: next.length
+                                          ? next
+                                          : roleOptions.slice(0, 1),
+                                      });
+                                    }}
+                                    disabled={!isEditing}
+                                  />
+                                  {role.replace(/_/g, " ")}
+                                </label>
+                              );
+                            }
+                          )}
+                          {!roleOptions.length && (
+                            <span className="text-xs text-slate-500 dark:text-slate-400">
+                              No roles defined
+                            </span>
+                          )}
                         </div>
                       ) : (
                         <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100">

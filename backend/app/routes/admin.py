@@ -6,7 +6,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -16,7 +16,15 @@ from app.db import engine, get_db
 from app.models.dashboard import Dashboard
 from app.models.dashboard_widget import DashboardWidget
 from app.models.user import User
-from app.services.auth_utils import ensure_allowed_role, get_current_user, require_admin_or_developer
+from app.models.role import Role
+from app.services.auth_utils import (
+    DEFAULT_ROLES,
+    ensure_allowed_role,
+    get_current_user,
+    refresh_role_cache,
+    require_admin,
+    require_admin_or_developer,
+)
 from app.services.dataset_registry import (
     delete_all_datasets,
     delete_dataset,
@@ -32,6 +40,10 @@ router = APIRouter(
 
 HOME_DASHBOARD_ID = "home"
 HOME_DASHBOARD_NAME = "Home"
+
+
+def normalize_role_name(name: str) -> str:
+    return (name or "").strip().lower().replace(" ", "_")
 
 
 def parse_roles(raw: Any) -> List[str]:
@@ -75,6 +87,69 @@ class DashboardUpdatePayload(BaseModel):
 
 class DashboardReorderPayload(BaseModel):
     order: List[str] = Field(default_factory=list)
+
+
+class RoleCreatePayload(BaseModel):
+    name: str = Field(..., min_length=1, max_length=50)
+
+
+@router.get("/roles")
+async def list_roles(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+) -> Dict[str, Any]:
+    roles = db.query(Role).order_by(Role.name.asc()).all()
+    if not roles:
+        db.add(Role(name="admin"))
+        db.commit()
+        roles = db.query(Role).order_by(Role.name.asc()).all()
+    refresh_role_cache()
+    return {"roles": [r.name for r in roles]}
+
+
+@router.post("/roles", status_code=201)
+async def create_role(
+    payload: RoleCreatePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+) -> Dict[str, str]:
+    name = normalize_role_name(payload.name)
+    if not name:
+        raise HTTPException(status_code=400, detail="Role name is required")
+
+    existing = db.query(Role).filter(func.lower(Role.name) == name).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Role already exists")
+
+    role = Role(name=name)
+    db.add(role)
+    db.commit()
+    db.refresh(role)
+    refresh_role_cache()
+    return {"name": role.name}
+
+
+@router.delete("/roles/{role_name}", status_code=204)
+async def delete_role(
+    role_name: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    name = normalize_role_name(role_name)
+    if name == "admin":
+        raise HTTPException(status_code=400, detail="Admin role cannot be removed")
+
+    in_use = db.query(User).filter(func.lower(User.role) == name).first()
+    if in_use:
+        raise HTTPException(status_code=400, detail="Role is assigned to a user")
+
+    deleted = db.query(Role).filter(func.lower(Role.name) == name).delete()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Role not found")
+
+    db.commit()
+    refresh_role_cache()
+    return Response(status_code=204)
 
 
 def get_or_create_dashboard(

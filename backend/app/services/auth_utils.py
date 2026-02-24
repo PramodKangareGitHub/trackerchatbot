@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Set
 
 import jwt
 from fastapi import Depends, HTTPException, status
@@ -9,8 +9,9 @@ from passlib.context import CryptContext
 from passlib.exc import UnknownHashError
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.models.user import User
+from app.models.role import Role
 
 pwd_context = CryptContext(
     schemes=["pbkdf2_sha256"],
@@ -22,7 +23,10 @@ http_bearer = HTTPBearer(auto_error=False)
 JWT_SECRET = os.getenv("JWT_SECRET", "super-secret-key")
 JWT_ALG = "HS256"
 JWT_TTL_SECONDS = int(os.getenv("JWT_TTL_SECONDS", "7200"))
-ALLOWED_ROLES = {"admin", "developer", "leader", "delivery_manager"}
+DEFAULT_ROLES = {"admin", "developer", "leader", "delivery_manager"}
+CACHE_TTL_SECONDS = 60
+_cached_roles: Set[str] = set()
+_cache_ts: Optional[datetime] = None
 
 
 def hash_password(password: str) -> str:
@@ -46,6 +50,40 @@ def create_access_token(user: User) -> tuple[str, datetime]:
     }
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
     return token, expires_at
+
+
+def _normalize_role(role: str) -> str:
+    return (role or "").strip().lower().replace(" ", "_")
+
+
+def _load_roles_from_db() -> Set[str]:
+    roles: Set[str] = set()
+    try:
+        with SessionLocal() as db:
+            existing = {_normalize_role(r.name) for r in db.query(Role).all() if r.name}
+            if "admin" not in existing:
+                db.merge(Role(name="admin"))
+                db.commit()
+                existing = {_normalize_role(r.name) for r in db.query(Role).all() if r.name}
+            roles = {r for r in existing if r}
+    except Exception:
+        # Fall back to defaults if the roles table is unavailable for any reason.
+        roles = set(DEFAULT_ROLES)
+    return roles or set(DEFAULT_ROLES)
+
+
+def get_known_roles(force_refresh: bool = False) -> Set[str]:
+    global _cached_roles, _cache_ts
+    if not force_refresh and _cached_roles and _cache_ts:
+        if datetime.utcnow() - _cache_ts < timedelta(seconds=CACHE_TTL_SECONDS):
+            return _cached_roles
+    _cached_roles = _load_roles_from_db()
+    _cache_ts = datetime.utcnow()
+    return _cached_roles
+
+
+def refresh_role_cache() -> Set[str]:
+    return get_known_roles(force_refresh=True)
 
 
 def _decode_token(token: str) -> dict:
@@ -100,8 +138,9 @@ def require_admin_or_developer(user: User = Depends(get_current_user)) -> User:
 
 
 def ensure_allowed_role(role: str) -> str:
-    normalized = (role or "").strip().lower()
-    if normalized not in ALLOWED_ROLES:
+    normalized = _normalize_role(role)
+    roles = get_known_roles()
+    if normalized not in roles:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role")
     return normalized
 

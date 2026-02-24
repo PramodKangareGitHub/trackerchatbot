@@ -5,6 +5,7 @@ import UserManagementSection from "./admin/UserManagementSection";
 import DatasetManagementSection from "./admin/DatasetManagementSection";
 import DashboardConfigSection from "./admin/DashboardConfigSection";
 import BannerManagementSection from "./admin/BannerManagementSection";
+import RoleManagementSection from "./admin/RoleManagementSection";
 import type {
   ChartConfig,
   Dashboard,
@@ -15,7 +16,7 @@ import type {
   Widget,
   WidgetType,
 } from "./admin/types";
-import { ROLE_OPTIONS } from "./admin/types";
+import { DEFAULT_ROLES } from "./admin/types";
 import ResultTable from "./ResultTable";
 import {
   BannerConfig,
@@ -30,7 +31,8 @@ type SectionId =
   | "records"
   | "dashboard"
   | "banners"
-  | "users";
+  | "users"
+  | "roles";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 const withBase = (path: string) => {
@@ -49,9 +51,18 @@ const AdminPanel = ({
   authUserRole,
   allowedSections,
 }: AdminPanelProps) => {
-  const userRole: UserRole = ROLE_OPTIONS.includes(authUserRole as UserRole)
-    ? (authUserRole as UserRole)
-    : "leader";
+  const [roleOptions, setRoleOptions] = useState<UserRole[]>(DEFAULT_ROLES);
+  const [rolesLoading, setRolesLoading] = useState(false);
+  const normalizeRole = useCallback(
+    (role: string) => (role || "").trim().toLowerCase(),
+    []
+  );
+  const userRole: UserRole = useMemo(() => {
+    const normalized = normalizeRole(authUserRole);
+    if (normalized) return normalized;
+    if (roleOptions.length) return roleOptions[0];
+    return "leader";
+  }, [authUserRole, normalizeRole, roleOptions]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [datasetsLoading, setDatasetsLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -85,9 +96,7 @@ const AdminPanel = ({
   const [activeSection, setActiveSection] = useState<SectionId>("dashboard");
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
-  const [newUserRole, setNewUserRole] = useState<
-    "admin" | "developer" | "leader" | "delivery_manager"
-  >("leader");
+  const [newUserRole, setNewUserRole] = useState<UserRole>("leader");
   const [creatingUser, setCreatingUser] = useState(false);
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
@@ -158,14 +167,15 @@ const AdminPanel = ({
     useMemo(() => {
       const base: { id: SectionId; label: string; hint?: string }[] = [
         { id: "upload", label: "Upload", hint: "Excel" },
-        { id: "datasets", label: "Data Management" },
-        { id: "records", label: "Add / Update Records" },
+        { id: "datasets", label: "Data Sets" },
+        { id: "records", label: "Data Management" },
         { id: "dashboard", label: "Dashboard Management" },
         { id: "banners", label: "Banner Management" },
       ];
 
       if (authUserRole === "admin") {
         base.push({ id: "users", label: "User Management" });
+        base.push({ id: "roles", label: "Role Management" });
       }
 
       if (allowedSections && allowedSections.length) {
@@ -173,6 +183,24 @@ const AdminPanel = ({
       }
       return base;
     }, [authUserRole, allowedSections]);
+
+  const loadRoles = async () => {
+    setRolesLoading(true);
+    try {
+      const data = await api<{ roles: string[] }>("/api/admin/roles");
+      const names = Array.from(
+        new Set((data.roles || []).map((r) => normalizeRole(r)))
+      ).filter(Boolean) as UserRole[];
+      setRoleOptions(names.length ? names : DEFAULT_ROLES);
+    } catch (err) {
+      if (userRole === "admin") {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+      setRoleOptions(DEFAULT_ROLES);
+    } finally {
+      setRolesLoading(false);
+    }
+  };
 
   const loadDatasets = async () => {
     setDatasetsLoading(true);
@@ -234,16 +262,19 @@ const AdminPanel = ({
       const data = await api<{ widgets: Widget[] }>(
         `/api/admin/dashboard-config?dashboard_id=${encodeURIComponent(targetDashboardId)}`
       );
+      const normalizedOptions = roleOptions.map(normalizeRole);
+      const optionsSet = new Set(normalizedOptions);
       const normalized: Widget[] = (data.widgets || []).map((w) => {
         const incomingArray = Array.isArray(w.roles) ? w.roles : [];
-        const safeRoles = incomingArray.filter((r): r is UserRole =>
-          ROLE_OPTIONS.includes(r as UserRole)
-        );
+        const safeRoles = incomingArray
+          .map((r) => normalizeRole(r))
+          .filter((r): r is UserRole => optionsSet.has(r));
+        const adminDefault = normalizedOptions[0] || "admin";
         const finalRoles: UserRole[] =
           userRole === "admin"
             ? safeRoles.length
               ? safeRoles
-              : ["admin"]
+              : [adminDefault]
             : [userRole];
         return {
           ...w,
@@ -254,7 +285,9 @@ const AdminPanel = ({
       const scoped =
         userRole === "admin"
           ? normalized
-          : normalized.filter((w) => (w.roles || []).includes(userRole));
+          : normalized.filter((w) =>
+              (w.roles || []).map((r) => normalizeRole(r)).includes(userRole)
+            );
       setWidgets(scoped as Widget[]);
       if (!selectedDashboardId) {
         setSelectedDashboardId(targetDashboardId);
@@ -280,8 +313,12 @@ const AdminPanel = ({
   };
 
   useEffect(() => {
+    if (userRole === "admin") {
+      loadRoles();
+    }
     loadDatasets();
     loadDashboards();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -310,6 +347,13 @@ const AdminPanel = ({
       setActiveSection(sections[0].id);
     }
   }, [sections, activeSection]);
+
+  useEffect(() => {
+    if (!roleOptions.length) return;
+    setNewUserRole((prev) =>
+      prev && roleOptions.includes(prev) ? prev : roleOptions[0]
+    );
+  }, [roleOptions]);
 
   useEffect(() => {
     if (!widgets.length) {
@@ -827,7 +871,7 @@ const AdminPanel = ({
         title: widgetType === "table" ? "Table Widget" : "Chart Widget",
         widget_type: widgetType,
         order_index: prev.length,
-        roles: [userRole === "admin" ? "admin" : userRole],
+        roles: [userRole === "admin" ? roleOptions[0] || "admin" : userRole],
         config: baseConfig,
       },
     ]);
@@ -959,9 +1003,20 @@ const AdminPanel = ({
     setWidgets((prev) =>
       prev.map((w, i) => {
         if (i !== idx) return w;
+        const allowedRoles = new Set(roleOptions.map((r) => normalizeRole(r)));
+        const requested = (
+          patch.roles ??
+          w.roles ?? [roleOptions[0] || "admin"]
+        ).map((r) => normalizeRole(r));
+        const filtered = requested.filter((r) =>
+          allowedRoles.has(r)
+        ) as UserRole[];
+        const adminDefault = roleOptions[0] || "admin";
         const nextRoles =
           userRole === "admin"
-            ? (patch.roles ?? w.roles ?? ["admin"])
+            ? filtered.length
+              ? filtered
+              : [adminDefault]
             : [userRole];
         return { ...w, ...patch, roles: nextRoles };
       })
@@ -982,6 +1037,21 @@ const AdminPanel = ({
     await persistWidgets(next, "remove");
   };
 
+  const handleCreateRole = async (name: string) => {
+    await api("/api/admin/roles", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    await loadRoles();
+  };
+
+  const handleDeleteRole = async (name: string) => {
+    await api(`/api/admin/roles/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    });
+    await loadRoles();
+  };
+
   const handleCreateUser = async () => {
     setError(null);
     setCreatingUser(true);
@@ -996,7 +1066,7 @@ const AdminPanel = ({
       });
       setNewUserEmail("");
       setNewUserPassword("");
-      setNewUserRole("leader");
+      setNewUserRole(roleOptions[0] || "leader");
       await loadUsers();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -1064,6 +1134,9 @@ const AdminPanel = ({
       case "records":
         return (
           <RecordsSection
+            datasets={datasets}
+            selectedDatasetId={selectedDatasetId}
+            onSelectDataset={setSelectedDatasetId}
             selectedDataset={selectedDataset}
             recordDraft={recordDraft}
             setRecordDraft={setRecordDraft}
@@ -1096,6 +1169,7 @@ const AdminPanel = ({
             setNewUserPassword={setNewUserPassword}
             newUserRole={newUserRole}
             setNewUserRole={setNewUserRole}
+            roleOptions={roleOptions}
             onCreateUser={handleCreateUser}
             creatingUser={creatingUser}
             onRefreshUsers={loadUsers}
@@ -1107,6 +1181,15 @@ const AdminPanel = ({
             savingPassword={savingPassword}
             deletingUserId={deletingUserId}
             onDeleteUser={handleDeleteUser}
+          />
+        );
+      case "roles":
+        return (
+          <RoleManagementSection
+            roles={roleOptions}
+            loading={rolesLoading}
+            onCreateRole={handleCreateRole}
+            onDeleteRole={handleDeleteRole}
           />
         );
       case "banners":
@@ -1167,6 +1250,7 @@ const AdminPanel = ({
             previewLoading={previewLoading}
             previewError={previewError}
             userRole={userRole}
+            roleOptions={roleOptions}
             selectedDatasetId={selectedDatasetId}
             onSelectDataset={setSelectedDatasetId}
             onAddWidgetClick={handleAddWidgetClick}

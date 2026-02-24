@@ -10,6 +10,7 @@ export type UserManagementSectionProps = {
   setNewUserPassword: Dispatch<SetStateAction<string>>;
   newUserRole: UserRole;
   setNewUserRole: Dispatch<SetStateAction<UserRole>>;
+  roleOptions: string[];
   onCreateUser: () => void;
   creatingUser: boolean;
   onRefreshUsers: () => void;
@@ -32,6 +33,7 @@ const UserManagementSection = ({
   setNewUserPassword,
   newUserRole,
   setNewUserRole,
+  roleOptions,
   onCreateUser,
   creatingUser,
   onRefreshUsers,
@@ -51,7 +53,7 @@ const UserManagementSection = ({
           Create User
         </h3>
         <span className="text-xs text-slate-500 dark:text-slate-400">
-          Leader / Delivery Manager / Admin / Developer
+          Choose any available role
         </span>
       </div>
 
@@ -88,11 +90,13 @@ const UserManagementSection = ({
             value={newUserRole}
             onChange={(e) => setNewUserRole(e.target.value as UserRole)}
             className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+            disabled={!roleOptions.length}
           >
-            <option value="leader">Leader</option>
-            <option value="delivery_manager">Delivery Manager</option>
-            <option value="admin">Admin</option>
-            <option value="developer">Developer</option>
+            {roleOptions.map((role) => (
+              <option key={role} value={role}>
+                {role.replace(/_/g, " ")}
+              </option>
+            ))}
           </select>
         </div>
       </div>

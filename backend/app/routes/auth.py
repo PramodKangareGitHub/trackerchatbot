@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.user import User
 from app.services.auth_utils import (
-    ALLOWED_ROLES,
     create_access_token,
     ensure_allowed_role,
     get_current_user,
@@ -55,6 +54,11 @@ class SeedAdminPayload(BaseModel):
 
 
 class ChangePasswordPayload(BaseModel):
+    new_password: str = Field(min_length=6)
+
+
+class SelfChangePasswordPayload(BaseModel):
+    current_password: str = Field(min_length=1)
     new_password: str = Field(min_length=6)
 
 
@@ -188,3 +192,23 @@ async def delete_user(
     db.delete(target)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/change-password", response_model=UserOut)
+async def change_password_self(
+    payload: SelfChangePasswordPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    user = db.query(User).filter(User.id == current_user.id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+
+    user.password_hash = hash_password(payload.new_password)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return to_user_out(user)

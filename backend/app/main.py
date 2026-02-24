@@ -8,7 +8,8 @@ from app.routes.pins import router as pins_router
 from app.routes.auth import router as auth_router
 from app.db import SessionLocal
 from app.models.user import User
-from app.services.auth_utils import hash_password
+from app.models.role import Role
+from app.services.auth_utils import DEFAULT_ROLES, hash_password
 
 
 def create_app() -> FastAPI:
@@ -40,6 +41,15 @@ def create_app() -> FastAPI:
             user = User(email=email, password_hash=hash_password(password), role="admin")
             db.add(user)
             db.commit()
+
+    @app.on_event("startup")
+    def seed_roles() -> None:
+        """Ensure default roles exist for dynamic role validation."""
+        with SessionLocal() as db:
+            existing = {r.name for r in db.query(Role).all()}
+            if "admin" not in existing:
+                db.add(Role(name="admin"))
+                db.commit()
 
     @app.get("/health")
     async def health() -> dict[str, str]:

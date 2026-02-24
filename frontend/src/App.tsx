@@ -44,6 +44,18 @@ const App = () => {
   const [loginPassword, setLoginPassword] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [showFloatingChat, setShowFloatingChat] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [changePasswordError, setChangePasswordError] = useState<string | null>(
+    null
+  );
+  const [changePasswordSuccess, setChangePasswordSuccess] = useState<
+    string | null
+  >(null);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -127,6 +139,8 @@ const App = () => {
 
   const handleLogout = () => {
     clearAuth();
+    setShowProfileMenu(false);
+    setShowChangePassword(false);
   };
 
   const apiBase = import.meta.env.VITE_API_BASE || "http://localhost:8000";
@@ -229,6 +243,50 @@ const App = () => {
   const isViewerLike =
     !isAdmin && !isDeveloper && !isLeader && !isDeliveryManager;
 
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setChangePasswordError(null);
+    setChangePasswordSuccess(null);
+    if (!authToken) {
+      setChangePasswordError("Not authenticated");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setChangePasswordError("Passwords do not match");
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      const res = await fetch(`${apiBase}/api/auth/change-password`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: newPassword,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(
+          body.detail || res.statusText || "Failed to change password"
+        );
+      }
+      setChangePasswordSuccess("Password updated successfully");
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err) {
+      setChangePasswordError(
+        err instanceof Error ? err.message : "Failed to change password"
+      );
+    } finally {
+      setChangingPassword(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors duration-200 dark:bg-slate-900 dark:text-slate-100">
       <div className="flex min-h-screen w-full flex-col px-3 py-8 md:px-4 lg:px-5">
@@ -244,59 +302,102 @@ const App = () => {
               &nbsp;&nbsp;One View. Total Workforce Clarity.
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 rounded-2xl bg-slate-100/60 px-2 py-1 shadow-sm ring-1 ring-indigo-100 dark:bg-slate-800/60 dark:ring-indigo-900/30">
-              <button
-                type="button"
-                onClick={() => handleModeSwitch("chat")}
-                className={`segmented-tab ${
-                  roleView === "chat" ? "segmented-tab--active" : ""
-                }`}
-              >
-                <span aria-hidden>💬</span>
-                Dashboard View
-              </button>
-              <button
-                type="button"
-                onClick={handleOpenSettings}
-                disabled={isViewerLike}
-                className={`segmented-tab ${
-                  roleView !== "chat" ? "segmented-tab--active" : ""
-                } ${isViewerLike ? "opacity-50 cursor-not-allowed" : ""}`}
-                title={
-                  isViewerLike
-                    ? "Settings available for elevated roles"
-                    : "Open settings"
-                }
-              >
-                <span aria-hidden>⚙️</span>
-                Settings
-              </button>
-            </div>
+          <div className="relative flex items-center gap-3">
             <button
               type="button"
-              onClick={() => setTheme(theme === "light" ? "dark" : "light")}
-              className="btn-outline-primary gap-2 rounded-full px-4 py-2"
-              aria-label="Toggle theme"
+              onClick={() => setShowProfileMenu((prev) => !prev)}
+              className="flex items-center gap-2 rounded-full bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:shadow-md dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700"
+              aria-haspopup="menu"
+              aria-expanded={showProfileMenu}
             >
-              <span
-                className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-xs text-slate-700 dark:bg-slate-700 dark:text-slate-100"
-                aria-hidden
-              >
-                {theme === "light" ? "🌞" : "🌙"}
+              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-sky-600 text-base font-bold text-white shadow-sm dark:bg-sky-500">
+                {authUser?.email?.[0]?.toUpperCase() || "U"}
               </span>
-              {nextThemeLabel}
+              <span className="hidden text-left text-sm leading-tight sm:block">
+                <span className="block font-semibold">{authUser?.email}</span>
+                <span className="block text-xs text-slate-500 dark:text-slate-400">
+                  {authUser?.role?.replace(/_/g, " ")}
+                </span>
+              </span>
+              <span aria-hidden>{showProfileMenu ? "▲" : "▼"}</span>
             </button>
-            <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm dark:bg-slate-800 dark:text-slate-200">
-              {authUser?.email} ({authUser?.role})
-            </div>
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="btn-outline-primary px-3 py-1 text-xs"
-            >
-              Logout
-            </button>
+
+            {showProfileMenu && (
+              <div className="absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                <div className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-100">
+                  <div>{authUser?.email}</div>
+                  <div className="text-xs font-normal text-slate-500 dark:text-slate-400">
+                    {authUser?.role?.replace(/_/g, " ")}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleModeSwitch("chat");
+                    setShowProfileMenu(false);
+                  }}
+                  className={`flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold transition hover:bg-slate-50 dark:hover:bg-slate-700 ${
+                    roleView === "chat" ? "bg-slate-50 dark:bg-slate-700" : ""
+                  }`}
+                >
+                  <span aria-hidden>🏠</span> Dashboard Home
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleOpenSettings();
+                    setShowProfileMenu(false);
+                  }}
+                  disabled={isViewerLike}
+                  className={`flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold transition hover:bg-slate-50 dark:hover:bg-slate-700 ${
+                    isViewerLike ? "cursor-not-allowed opacity-60" : ""
+                  }`}
+                  title={
+                    isViewerLike
+                      ? "Settings available for elevated roles"
+                      : "Open settings"
+                  }
+                >
+                  <span aria-hidden>⚙️</span> Settings
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowChangePassword(true);
+                    setShowProfileMenu(false);
+                    setChangePasswordError(null);
+                    setChangePasswordSuccess(null);
+                    setCurrentPassword("");
+                    setNewPassword("");
+                    setConfirmPassword("");
+                  }}
+                  className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold transition hover:bg-slate-50 dark:hover:bg-slate-700"
+                >
+                  <span aria-hidden>🔒</span> Change Password
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTheme(theme === "light" ? "dark" : "light");
+                    setShowProfileMenu(false);
+                  }}
+                  className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold transition hover:bg-slate-50 dark:hover:bg-slate-700"
+                >
+                  <span aria-hidden>{theme === "light" ? "🌙" : "🌞"}</span>
+                  {nextThemeLabel}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowProfileMenu(false);
+                    handleLogout();
+                  }}
+                  className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold text-rose-600 transition hover:bg-rose-50 dark:text-rose-200 dark:hover:bg-rose-900/30"
+                >
+                  <span aria-hidden>🚪</span> Logout
+                </button>
+              </div>
+            )}
           </div>
         </header>
 
@@ -403,6 +504,105 @@ const App = () => {
                 showSql={isDeveloper}
                 heightClass="h-full max-h-full"
               />
+            </div>
+          </div>
+        </>
+      )}
+
+      {showChangePassword && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-slate-900/40"
+            onClick={() => setShowChangePassword(false)}
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+            <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-800 dark:text-slate-100">
+                    Change Password
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Update your account password.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowChangePassword(false)}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                >
+                  Close
+                </button>
+              </div>
+
+              <form className="space-y-3" onSubmit={handleChangePassword}>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                    Current Password
+                  </label>
+                  <input
+                    type="password"
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    required
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                    New Password
+                  </label>
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    minLength={6}
+                    required
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                    Confirm New Password
+                  </label>
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    minLength={6}
+                    required
+                  />
+                </div>
+
+                {changePasswordError && (
+                  <p className="text-sm text-rose-600 dark:text-rose-400">
+                    {changePasswordError}
+                  </p>
+                )}
+                {changePasswordSuccess && (
+                  <p className="text-sm text-emerald-600 dark:text-emerald-400">
+                    {changePasswordSuccess}
+                  </p>
+                )}
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowChangePassword(false)}
+                    className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={changingPassword}
+                    className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-700 disabled:opacity-60"
+                  >
+                    {changingPassword ? "Updating…" : "Update Password"}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         </>

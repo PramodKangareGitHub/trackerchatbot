@@ -7,7 +7,7 @@ export type Dataset = {
   created_at?: string;
 };
 
-export type UserRole = "admin" | "developer" | "leader" | "delivery_manager";
+export type UserRole = string;
 
 export type Dashboard = {
   id: string;
@@ -52,9 +52,14 @@ export type ManagedUser = {
   created_at?: string;
 };
 
-export const ROLE_OPTIONS: UserRole[] = [
+export const DEFAULT_ROLES: UserRole[] = [
   "admin",
   "developer",
   "leader",
   "delivery_manager",
 ];
+
+export type RoleOption = {
+  id?: string;
+  name: string;
+};
