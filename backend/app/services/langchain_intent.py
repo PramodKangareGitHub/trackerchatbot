@@ -1,4 +1,9 @@
 from __future__ import annotations
+import urllib3 
+
+# Disable SSL warnings (for self-signed certs/testing only) 
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning) 
 
 import json
 import os
@@ -90,7 +95,7 @@ def _ai_cafe_invoke(messages: list[dict[str, str]]) -> str:
         "temperature": temperature,
     }
 
-    response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+    response = requests.post(endpoint, headers=headers, json=payload, timeout=30, verify=False)
     response.raise_for_status()
     data = response.json()
 
