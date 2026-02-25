@@ -600,6 +600,8 @@ async def admin_list_records(
     dataset_id: str,
     limit: int = 50,
     offset: int = 0,
+    filter_by: Optional[str] = Query(default=None),
+    filter_values: Optional[List[str]] = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
@@ -610,18 +612,40 @@ async def admin_list_records(
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
 
+    columns = list(dataset.columns_json or [])
+    where_clauses: List[str] = []
+    params: Dict[str, Any] = {"limit": limit, "offset": offset}
+
+    if filter_by:
+        if filter_by not in columns:
+            raise HTTPException(status_code=400, detail="Filter column not found in dataset")
+        if filter_values:
+            placeholders = []
+            for idx, val in enumerate(filter_values):
+                key = f"fv_{idx}"
+                placeholders.append(f":{key}")
+                params[key] = val
+            clause = f'"{filter_by}" IN ({", ".join(placeholders)})'
+            where_clauses.append(clause)
+
     try:
+        where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
         with engine.connect() as conn:
             rows = conn.execute(
-                text(f'SELECT rowid AS rowid, * FROM "{dataset.table_name}" LIMIT :limit OFFSET :offset'),
-                {"limit": limit, "offset": offset},
+                text(
+                    f'SELECT rowid AS rowid, * FROM "{dataset.table_name}"{where_sql} LIMIT :limit OFFSET :offset'
+                ),
+                params,
             ).mappings().all()
-            total = conn.execute(text(f'SELECT COUNT(*) AS c FROM "{dataset.table_name}"')).scalar_one()
+            total = conn.execute(
+                text(f'SELECT COUNT(*) AS c FROM "{dataset.table_name}"{where_sql}'),
+                params,
+            ).scalar_one()
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Failed to fetch records: {exc}") from exc
 
     return {
-        "columns": list(dataset.columns_json or []),
+        "columns": columns,
         "rows": [dict(row) for row in rows],
         "total": int(total or 0),
     }

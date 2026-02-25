@@ -146,6 +146,23 @@ def _filter_allowed_groups(groups: list[dict[str, Any]], allowed: Sequence[str])
     return [g for g in groups if str(g.get("column", "")).lower() in allowed_set]
 
 
+def _normalized_date_expr(column: str) -> str:
+    """Return a DATE() expression that normalizes common dd/mm/yyyy and mm/dd/yyyy shapes."""
+    col_text = f'CAST("{column}" AS TEXT)'
+    return (
+        "DATE(CASE "
+        "WHEN {col} GLOB '[0-9][0-9]/[0-9][0-9]/[0-9][0-9][0-9][0-9]' "
+        "THEN substr({col},7,4)||'-'||substr({col},1,2)||'-'||substr({col},4,2) "
+        "WHEN {col} GLOB '[0-9]/[0-9]/[0-9][0-9][0-9][0-9]' "
+        "THEN substr({col},5,4)||'-0'||substr({col},1,1)||'-0'||substr({col},3,1) "
+        "WHEN {col} GLOB '[0-9]/[0-9][0-9]/[0-9][0-9][0-9][0-9]' "
+        "THEN substr({col},6,4)||'-0'||substr({col},1,1)||'-'||substr({col},3,2) "
+        "WHEN {col} GLOB '[0-9][0-9]/[0-9]/[0-9][0-9][0-9][0-9]' "
+        "THEN substr({col},6,4)||'-'||substr({col},1,2)||'-0'||substr({col},4,1) "
+        "ELSE {col} END)".format(col=col_text)
+    )
+
+
 def _inject_filters(sql: str, filters: list[dict[str, Any]]) -> tuple[str, Dict[str, Any]]:
     if not filters:
         return sql, {}
@@ -189,12 +206,43 @@ def _inject_filters(sql: str, filters: list[dict[str, Any]]) -> tuple[str, Dict[
                 clauses.append(f"({' OR '.join(or_parts)})")
             continue
 
+        # Allow substring match for leader-style columns to catch phrases like "Optum Leader"
+        if "leader" in col_canon:
+            or_parts = []
+            for v_idx, value in enumerate(values):
+                trimmed_value = str(value).strip()
+                if not trimmed_value:
+                    continue
+                param_key = f"f_{f_idx}_{v_idx}"
+                or_parts.append(
+                    f"LOWER(COALESCE(\"{column}\", \"\")) LIKE '%' || LOWER(:{param_key}) || '%'"
+                )
+                params[param_key] = trimmed_value
+            if or_parts:
+                clauses.append(f"({' OR '.join(or_parts)})")
+            continue
+
         or_parts: list[str] = []
         for v_idx, value in enumerate(values):
             trimmed_value = str(value).strip()
             if not trimmed_value:
                 continue
             param_key = f"f_{f_idx}_{v_idx}"
+
+            # Support quarter buckets for date columns (e.g., Q3, quarter3)
+            if col_canon in DATE_BUCKET_CANONICAL:
+                q_match = re.match(r"^(?:quarter:)?q?([1-4])$", trimmed_value, flags=re.IGNORECASE)
+                if q_match:
+                    q_num = int(q_match.group(1))
+                    start_month = (q_num - 1) * 3 + 1
+                    end_month = start_month + 2
+                    month_expr = f"CAST(STRFTIME('%m', {_normalized_date_expr(column)}) AS INTEGER)"
+                    clauses.append(
+                        f"({month_expr} >= :{param_key}_mstart AND {month_expr} <= :{param_key}_mend)"
+                    )
+                    params[f"{param_key}_mstart"] = start_month
+                    params[f"{param_key}_mend"] = end_month
+                    continue
 
             # General range support (e.g., "range:1-5", "range:10+"), casting column to NUMERIC
             range_match_any = re.match(r"^range:(-?\d+(?:\.\d+)?)(?:-?(-?\d+(?:\.\d+)?|\+))?$", trimmed_value)
@@ -244,19 +292,7 @@ def _inject_filters(sql: str, filters: list[dict[str, Any]]) -> tuple[str, Dict[
             if date_range_match:
                 start_date, end_date = date_range_match.groups()
                 date_parts: list[str] = []
-                col_text = f'CAST("{column}" AS TEXT)'
-                col_expr = (
-                    "DATE(CASE "
-                    "WHEN {col} GLOB '[0-9][0-9]/[0-9][0-9]/[0-9][0-9][0-9][0-9]' "
-                    "THEN substr({col},7,4)||'-'||substr({col},1,2)||'-'||substr({col},4,2) "
-                    "WHEN {col} GLOB '[0-9]/[0-9]/[0-9][0-9][0-9][0-9]' "
-                    "THEN substr({col},5,4)||'-0'||substr({col},1,1)||'-0'||substr({col},3,1) "
-                    "WHEN {col} GLOB '[0-9]/[0-9][0-9]/[0-9][0-9][0-9][0-9]' "
-                    "THEN substr({col},6,4)||'-0'||substr({col},1,1)||'-'||substr({col},3,2) "
-                    "WHEN {col} GLOB '[0-9][0-9]/[0-9]/[0-9][0-9][0-9][0-9]' "
-                    "THEN substr({col},6,4)||'-'||substr({col},1,2)||'-0'||substr({col},4,1) "
-                    "ELSE {col} END)".format(col=col_text)
-                )
+                col_expr = _normalized_date_expr(column)
                 if start_date:
                     date_parts.append(f"{col_expr} >= DATE(:{param_key}_start)")
                     params[f"{param_key}_start"] = start_date
@@ -561,17 +597,54 @@ async def chat_endpoint(payload: ChatRequest, db: Session = Depends(get_db)) -> 
             status_value = "In-Progress"
         elif "halted" in question_lower:
             status_value = "Halted"
+        elif "onboarded" in question_lower or "onboard" in question_lower:
+            status_value = "Onboarded"
         if not status_value:
             return
         status_col = next((c for c in columns if c.lower() == "status"), None)
         if not status_col:
             return
-        already = any(f["column"].lower() == status_col.lower() for f in normalized_filters)
+        already = any(_canon_column(f["column"]) == _canon_column(status_col) for f in normalized_filters)
         if already:
             return
         normalized_filters.append({"column": status_col, "values": [status_value]})
 
     _auto_filter_status()
+
+    def _auto_filter_leader() -> None:
+        question_lower = (payload.question or "").lower()
+        if "leader" not in question_lower:
+            return
+        leader_col = next((c for c in columns if "leader" in (c or "").lower()), None)
+        if not leader_col:
+            return
+        already = any(_canon_column(f["column"]) == _canon_column(leader_col) for f in normalized_filters)
+        if already:
+            return
+        leader_value: str | None = None
+        if "optum" in question_lower:
+            leader_value = "Optum Leader"
+        if not leader_value:
+            return
+        normalized_filters.append({"column": leader_col, "values": [leader_value]})
+
+    _auto_filter_leader()
+
+    def _auto_filter_quarter() -> None:
+        question_lower = (payload.question or "").lower()
+        quarter_match = re.search(r"\bq([1-4])\b", question_lower) or re.search(r"quarter\s*([1-4])", question_lower)
+        if not quarter_match:
+            return
+        q_num = quarter_match.group(1)
+        date_col = next((c for c in columns if _canon_column(c) in DATE_BUCKET_CANONICAL), None)
+        if not date_col:
+            return
+        already = any(_canon_column(f["column"]) == _canon_column(date_col) for f in normalized_filters)
+        if already:
+            return
+        normalized_filters.append({"column": date_col, "values": [f"quarter:{q_num}"]})
+
+    _auto_filter_quarter()
 
     def _status_override_sql() -> tuple[str, str, str | None] | None:
         question_lower = (payload.question or "").lower()
@@ -1124,6 +1197,53 @@ async def chat_endpoint(payload: ChatRequest, db: Session = Depends(get_db)) -> 
 
     if intent.sql is None:
         if intent.status == "needs_filter":
+            # Fallback: if we already have concrete filters (auto-detected or user provided), run a simple filtered query
+            if normalized_filters:
+                base_sql = f'SELECT * FROM {dataset.table_name}'
+                try:
+                    filtered_sql, params = _inject_filters(base_sql, normalized_filters)
+                    if not re.search(r"\blimit\b", filtered_sql, flags=re.IGNORECASE):
+                        filtered_sql = f"{filtered_sql} LIMIT 500"
+
+                    validated_sql = validate_sql(
+                        filtered_sql,
+                        allowed_table=dataset.table_name,
+                        allowed_columns=columns,
+                    )
+                    rows = execute_safe_sql(
+                        engine,
+                        validated_sql,
+                        params=params,
+                        allowed_table=dataset.table_name,
+                        allowed_columns=columns,
+                    )
+                except SQLValidationError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                except Exception as exc:  # noqa: BLE001
+                    raise HTTPException(status_code=500, detail=f"Failed to execute SQL: {exc}") from exc
+
+                result_columns = list(rows[0].keys()) if rows else list(columns)
+                result_filter_groups = _result_filter_groups(rows, result_columns)
+                filtered_result_groups = _filter_allowed_groups(result_filter_groups, columns)
+
+                if filtered_result_groups:
+                    filter_groups_out = filtered_result_groups
+                else:
+                    fallback_groups = _dataset_filter_groups()
+                    filter_groups_out = _filter_allowed_groups(fallback_groups, columns)
+
+                return {
+                    "status": "ready",
+                    "llm_provider": llm_provider,
+                    "sql": validated_sql,
+                    "filter_groups": filter_groups_out,
+                    "result": {
+                        "rows": rows,
+                        "row_count": len(rows),
+                        "columns": result_columns,
+                    },
+                }
+
             return {"status": "needs_filter", "llm_provider": llm_provider, "filter_groups": _dataset_filter_groups()}
         raise HTTPException(status_code=500, detail="Intent did not return SQL")
 

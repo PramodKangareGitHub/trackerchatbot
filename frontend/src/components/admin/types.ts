@@ -24,6 +24,8 @@ export type TableConfig = {
   fields?: string[];
   group_by?: string;
   group_by_values?: string[];
+  filter_by?: string;
+  filter_values?: string[];
 };
 
 export type ChartConfig = {
@@ -33,6 +35,8 @@ export type ChartConfig = {
   chart_type?: "bar" | "line" | "pie";
   group_by?: string;
   group_by_values?: string[];
+  filter_by?: string;
+  filter_values?: string[];
 };
 
 export type Widget = {

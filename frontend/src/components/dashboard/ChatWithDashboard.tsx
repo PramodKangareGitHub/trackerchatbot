@@ -213,11 +213,20 @@ const ChatWithDashboard = ({
   ): { columns: string[]; rows: Record<string, unknown>[] } => {
     const groupBy = cfg.group_by || "";
     const groupValues: string[] = cfg.group_by_values || [];
+    const filterBy = cfg.filter_by || "";
+    const filterValues: string[] = cfg.filter_values || [];
     const baseColumns = cfg.fields?.length ? cfg.fields : datasetCols;
     const columns = (baseColumns || []).filter((c: string) => c);
 
-    const isAgeing = (col: string) =>
-      col.toLowerCase().replace(/[^a-z0-9]+/g, "_") === "ageing_as_on_today";
+    const normalize = (col: string) =>
+      col.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+    const isAgeing = (col: string) => normalize(col) === "ageing_as_on_today";
+    const isDateCol = (col: string) =>
+      normalize(col) === "jp_posting_date_to_hcl";
+    const hasQuarterVal = (values: string[]) =>
+      values.some((v) => /^Q[1-4]$/.test(v));
+    const hasDayRangeVal = (values: string[]) =>
+      values.some((v) => /^\d+\s*-\s*\d+$/.test(v) || /^\d+\+$/.test(v));
 
     const bucketAgeLabel = (val: unknown) => {
       const num = Number(val);
@@ -245,23 +254,84 @@ const ChatWithDashboard = ({
       return String(num) === trimmed;
     };
 
-    const matchesGroup = (rowVal: unknown) => {
-      if (!groupValues.length) return true;
-      if (isAgeing(groupBy)) {
-        const num = Number(rowVal);
-        if (!Number.isFinite(num)) return false;
-        return groupValues.some((gv) => matchesAgeRange(num, gv));
-      }
-      const label =
-        rowVal === null || rowVal === undefined ? "(blank)" : String(rowVal);
-      return groupValues.includes(label);
+    const toQuarterLabel = (val: unknown) => {
+      if (val === null || val === undefined) return "(blank)";
+      const parsed = new Date(String(val));
+      if (Number.isNaN(parsed.getTime())) return String(val);
+      const q = Math.floor(parsed.getMonth() / 3) + 1;
+      if (q < 1 || q > 4) return String(val);
+      return `Q${q}`;
     };
 
+    const toDayRangeLabel = (val: unknown) => {
+      if (val === null || val === undefined) return "(blank)";
+      const parsed = new Date(String(val));
+      if (Number.isNaN(parsed.getTime())) return String(val);
+      const diffMs = Date.now() - parsed.getTime();
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      if (!Number.isFinite(diffDays)) return String(val);
+      if (diffDays <= 30) return "0-30";
+      if (diffDays <= 60) return "31-60";
+      if (diffDays <= 90) return "61-90";
+      return "90+";
+    };
+
+    const toLabelFor = (
+      col: string,
+      selectedValues: string[],
+      val: unknown
+    ) => {
+      if (isAgeing(col)) return bucketAgeLabel(val);
+      if (isDateCol(col)) {
+        const hasQuarter = hasQuarterVal(selectedValues);
+        const hasDayRanges = hasDayRangeVal(selectedValues);
+        const quarterLabel = toQuarterLabel(val);
+        const dayLabel = toDayRangeLabel(val);
+        if (hasDayRanges && hasQuarter) {
+          if (selectedValues.includes(dayLabel)) return dayLabel;
+          if (selectedValues.includes(quarterLabel)) return quarterLabel;
+          return dayLabel;
+        }
+        if (hasDayRanges) return dayLabel;
+        if (hasQuarter) return quarterLabel;
+      }
+      return val === null || val === undefined ? "(blank)" : String(val);
+    };
+
+    const matchesSelection = (
+      col: string,
+      selectedValues: string[],
+      rowVal: unknown
+    ) => {
+      if (!selectedValues.length) return true;
+      if (isAgeing(col)) {
+        const num = Number(rowVal);
+        if (!Number.isFinite(num)) return false;
+        return selectedValues.some((gv) => matchesAgeRange(num, gv));
+      }
+      if (isDateCol(col)) {
+        const quarterLabel = toQuarterLabel(rowVal);
+        const dayLabel = toDayRangeLabel(rowVal);
+        const rawLabel =
+          rowVal === null || rowVal === undefined ? "(blank)" : String(rowVal);
+        return selectedValues.some(
+          (v) => v === quarterLabel || v === dayLabel || v === rawLabel
+        );
+      }
+      const label = toLabelFor(col, selectedValues, rowVal);
+      return selectedValues.includes(label);
+    };
+
+    const rowsAfterFilter = filterBy
+      ? rows.filter((row) =>
+          matchesSelection(filterBy, filterValues, row[filterBy])
+        )
+      : rows;
+
     if (groupBy) {
-      const filteredRows = rows.filter((row) => {
-        const key = row[groupBy];
-        return matchesGroup(key);
-      });
+      const filteredRows = rowsAfterFilter.filter((row) =>
+        matchesSelection(groupBy, groupValues, row[groupBy])
+      );
 
       const showGroupColumn = groupValues.length !== 1;
       const finalColumns = showGroupColumn
@@ -277,11 +347,7 @@ const ChatWithDashboard = ({
 
       filteredRows.forEach((row) => {
         const groupKeyRaw = row[groupBy];
-        const groupLabel = isAgeing(groupBy)
-          ? bucketAgeLabel(groupKeyRaw)
-          : groupKeyRaw === null || groupKeyRaw === undefined
-            ? "(blank)"
-            : String(groupKeyRaw);
+        const groupLabel = toLabelFor(groupBy, groupValues, groupKeyRaw);
 
         const keyParts = [
           groupLabel,
@@ -312,7 +378,7 @@ const ChatWithDashboard = ({
       return { columns: finalColumns, rows: rowsOut };
     }
 
-    const rowsOut = rows.slice(0, 50).map((row) => {
+    const rowsOut = rowsAfterFilter.slice(0, 50).map((row) => {
       const out: Record<string, unknown> = {};
       columns.forEach((c) => {
         out[c] = row[c];
@@ -320,6 +386,25 @@ const ChatWithDashboard = ({
       return out;
     });
     return { columns, rows: rowsOut };
+  };
+
+  const buildFilterQuery = (cfg: any) => {
+    const filterBy = cfg.filter_by || "";
+    const filterValues: string[] = cfg.filter_values || [];
+    if (!filterBy || !filterValues.length) return "";
+    const normalize = (s: string) =>
+      s.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+    const isDateBucket = normalize(filterBy) === "jp_posting_date_to_hcl";
+    const isQuarterVals = filterValues.every((v) => /^Q[1-4]$/.test(v));
+    const isDayRangeVals = filterValues.every(
+      (v) => /^\d+\s*-\s*\d+$/.test(v) || /^\d+\+$/.test(v)
+    );
+    if (isDateBucket && (isQuarterVals || isDayRangeVals)) return "";
+    const params = new URLSearchParams();
+    params.set("filter_by", filterBy);
+    filterValues.forEach((v) => params.append("filter_values", v));
+    const qs = params.toString();
+    return qs ? `&${qs}` : "";
   };
 
   useEffect(() => {
@@ -347,8 +432,9 @@ const ChatWithDashboard = ({
         const datasetId = cfg.dataset_id;
         if (!datasetId) continue;
         try {
+          const filterQs = buildFilterQuery(cfg);
           const res = await fetch(
-            `${apiBase}/api/admin/datasets/${datasetId}/records?limit=50`,
+            `${apiBase}/api/admin/datasets/${datasetId}/records?limit=50${filterQs}`,
             {
               headers: { Authorization: `Bearer ${authToken}` },
               signal: controller.signal,
@@ -421,8 +507,9 @@ const ChatWithDashboard = ({
         const datasetId = cfg.dataset_id;
         if (!datasetId) continue;
         try {
+          const filterQs = buildFilterQuery(cfg);
           const res = await fetch(
-            `${apiBase}/api/admin/datasets/${datasetId}/records`,
+            `${apiBase}/api/admin/datasets/${datasetId}/records${filterQs}`,
             {
               headers: { Authorization: `Bearer ${authToken}` },
               signal: controller.signal,
@@ -516,44 +603,62 @@ const ChatWithDashboard = ({
             </div>
 
             {widgetOptions.length > 0 && (
-              <div className="relative w-[260px] max-w-full">
-                <button
-                  type="button"
-                  onClick={() => setWidgetPickerOpen((o) => !o)}
-                  className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm hover:border-slate-400 focus:border-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-50"
-                >
-                  <span>
-                    {selectedDashboardId ? widgetSummary : "Select a dashboard"}
-                  </span>
-                  <span aria-hidden className="text-slate-400">
-                    ▾
-                  </span>
-                </button>
-                {widgetPickerOpen && (
-                  <div className="absolute z-30 mt-2 w-[260px] rounded-lg border border-slate-300 bg-white p-2 shadow-xl dark:border-slate-700 dark:bg-slate-900">
-                    <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-slate-900 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-800">
-                      <input
-                        type="checkbox"
-                        checked={selectedWidgetIds.includes("all")}
-                        onChange={() => handleWidgetToggle("all")}
-                      />
-                      All
-                    </label>
-                    {widgetOptions.map((w) => (
-                      <label
-                        key={w.id}
-                        className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-slate-800 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-800"
-                      >
+              <div className="flex items-center justify-between gap-4">
+                <div className="relative w-[260px] max-w-full">
+                  <button
+                    type="button"
+                    onClick={() => setWidgetPickerOpen((o) => !o)}
+                    className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm hover:border-slate-400 focus:border-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-50"
+                  >
+                    <span>
+                      {selectedDashboardId
+                        ? widgetSummary
+                        : "Select a dashboard"}
+                    </span>
+                    <span aria-hidden className="text-slate-400">
+                      ▾
+                    </span>
+                  </button>
+                  {widgetPickerOpen && (
+                    <div className="absolute z-30 mt-2 w-[260px] rounded-lg border border-slate-300 bg-white p-2 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                      <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-slate-900 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-800">
                         <input
                           type="checkbox"
-                          checked={selectedWidgetIds.includes(w.id)}
-                          onChange={() => handleWidgetToggle(w.id)}
+                          checked={selectedWidgetIds.includes("all")}
+                          onChange={() => handleWidgetToggle("all")}
                         />
-                        {w.title}
+                        All
                       </label>
-                    ))}
-                  </div>
-                )}
+                      {widgetOptions.map((w) => (
+                        <label
+                          key={w.id}
+                          className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-slate-800 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-800"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedWidgetIds.includes(w.id)}
+                            onChange={() => handleWidgetToggle(w.id)}
+                          />
+                          {w.title}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {/* <div className="flex-1 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    className="inline-flex items-center rounded-lg border border-sky-600 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-700 shadow-sm hover:bg-sky-100 focus:outline-none focus:ring-2 focus:ring-sky-400 dark:border-sky-400 dark:bg-slate-900 dark:text-sky-200 dark:hover:bg-slate-800"
+                  >
+                    Received new Job Posting?
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex items-center rounded-lg border border-emerald-600 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-400 dark:border-emerald-400 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-slate-800"
+                  >
+                    Update Job Posting
+                  </button>
+                </div> */}
               </div>
             )}
             {widgetLoading && (

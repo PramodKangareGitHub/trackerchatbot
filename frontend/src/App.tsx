@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
+
 import AdminPanel from "./components/AdminPanel";
 import ChatWithDashboard from "./components/dashboard/ChatWithDashboard";
 import ChatWindow from "./components/ChatWindow";
+import WizardRouter from "./wizard/WizardRouter";
+import {
+  BrowserRouter as Router,
+  Routes,
+  Route,
+  useNavigate,
+  Link,
+} from "react-router-dom";
 
 type AuthUser = {
   id: string;
@@ -30,6 +39,177 @@ const getInitialTheme = (): Theme => {
 
   const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
   return prefersDark ? "dark" : "light";
+};
+
+export type AppTopBarProps = {
+  authUser: AuthUser | null;
+  theme: Theme;
+  setTheme: (t: Theme) => void;
+  showProfileMenu: boolean;
+  setShowProfileMenu: (v: boolean) => void;
+  showChangePassword: boolean;
+  setShowChangePassword: (v: boolean) => void;
+  changePasswordError: string | null;
+  changePasswordSuccess: string | null;
+  currentPassword: string;
+  setCurrentPassword: (v: string) => void;
+  newPassword: string;
+  setNewPassword: (v: string) => void;
+  confirmPassword: string;
+  setConfirmPassword: (v: string) => void;
+  changingPassword: boolean;
+  handleChangePassword: (e: React.FormEvent) => void;
+  handleLogout: () => void;
+  handleModeSwitch: (v: "chat" | "admin" | "developer" | "leader") => void;
+  handleOpenSettings: () => void;
+  roleView: "chat" | "admin" | "developer" | "leader";
+  isViewerLike: boolean;
+  nextThemeLabel: string;
+  isAdmin: boolean;
+  isDeveloper: boolean;
+  isLeader: boolean;
+  isDeliveryManager: boolean;
+};
+
+export const AppTopBar: React.FC<AppTopBarProps> = ({
+  authUser,
+  theme,
+  setTheme,
+  showProfileMenu,
+  setShowProfileMenu,
+  showChangePassword,
+  setShowChangePassword,
+  changePasswordError,
+  changePasswordSuccess,
+  currentPassword,
+  setCurrentPassword,
+  newPassword,
+  setNewPassword,
+  confirmPassword,
+  setConfirmPassword,
+  changingPassword,
+  handleChangePassword,
+  handleLogout,
+  handleModeSwitch,
+  handleOpenSettings,
+  roleView,
+  isViewerLike,
+  nextThemeLabel,
+  isAdmin,
+  isDeveloper,
+  isLeader,
+  isDeliveryManager,
+}) => {
+  return (
+    <header className="flex items-center justify-between gap-4">
+      <div>
+        <h1 className="flex items-center gap-3 text-4xl font-semibold text-sky-600">
+          <span aria-hidden className="text-3xl" title="UHG Talent Vista">
+            🤖
+          </span>
+          UHG Talent Vista
+        </h1>
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          &nbsp;&nbsp;One View. Total Workforce Clarity.
+        </p>
+      </div>
+      <div className="relative flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => setShowProfileMenu(!showProfileMenu)}
+          className="flex items-center gap-2 rounded-full bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:shadow-md dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700"
+          aria-haspopup="menu"
+          aria-expanded={showProfileMenu}
+        >
+          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-sky-600 text-base font-bold text-white shadow-sm dark:bg-sky-500">
+            {authUser?.email?.[0]?.toUpperCase() || "U"}
+          </span>
+          <span className="hidden text-left text-sm leading-tight sm:block">
+            <span className="block font-semibold">{authUser?.email}</span>
+            <span className="block text-xs text-slate-500 dark:text-slate-400">
+              {authUser?.role?.replace(/_/g, " ")}
+            </span>
+          </span>
+          <span aria-hidden>{showProfileMenu ? "▲" : "▼"}</span>
+        </button>
+        {showProfileMenu && (
+          <div className="absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
+            <div className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-100">
+              <div>{authUser?.email}</div>
+              <div className="text-xs font-normal text-slate-500 dark:text-slate-400">
+                {authUser?.role?.replace(/_/g, " ")}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                handleModeSwitch("chat");
+                setShowProfileMenu(false);
+              }}
+              className={`flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold transition hover:bg-slate-50 dark:hover:bg-slate-700 ${
+                roleView === "chat" ? "bg-slate-50 dark:bg-slate-700" : ""
+              }`}
+            >
+              <span aria-hidden>🏠</span> Dashboard Home
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                handleOpenSettings();
+                setShowProfileMenu(false);
+              }}
+              disabled={isViewerLike}
+              className={`flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold transition hover:bg-slate-50 dark:hover:bg-slate-700 ${
+                isViewerLike ? "cursor-not-allowed opacity-60" : ""
+              }`}
+              title={
+                isViewerLike
+                  ? "Settings available for elevated roles"
+                  : "Open settings"
+              }
+            >
+              <span aria-hidden>⚙️</span> Settings
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowChangePassword(true);
+                setShowProfileMenu(false);
+                // Reset password fields/errors
+                setCurrentPassword("");
+                setNewPassword("");
+                setConfirmPassword("");
+              }}
+              className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold transition hover:bg-slate-50 dark:hover:bg-slate-700"
+            >
+              <span aria-hidden>🔒</span> Change Password
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setTheme(theme === "light" ? "dark" : "light");
+                setShowProfileMenu(false);
+              }}
+              className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold transition hover:bg-slate-50 dark:hover:bg-slate-700"
+            >
+              <span aria-hidden>{theme === "light" ? "🌙" : "🌞"}</span>
+              {nextThemeLabel}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowProfileMenu(false);
+                handleLogout();
+              }}
+              className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold text-rose-600 transition hover:bg-rose-50 dark:text-rose-200 dark:hover:bg-rose-900/30"
+            >
+              <span aria-hidden>🚪</span> Logout
+            </button>
+          </div>
+        )}
+      </div>
+    </header>
+  );
 };
 
 const App = () => {
@@ -287,327 +467,262 @@ const App = () => {
     }
   };
 
+  // Wizard integration: wrap main app in Router and add /wizard/* route
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors duration-200 dark:bg-slate-900 dark:text-slate-100">
-      <div className="flex min-h-screen w-full flex-col px-3 py-8 md:px-4 lg:px-5">
-        <header className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="flex items-center gap-3 text-4xl font-semibold text-sky-600">
-              <span aria-hidden className="text-3xl" title="UHG Talent Vista">
-                🤖
-              </span>
-              UHG Talent Vista
-            </h1>
-            <p className="text-sm text-slate-500 dark:text-slate-400">
-              &nbsp;&nbsp;One View. Total Workforce Clarity.
-            </p>
-          </div>
-          <div className="relative flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setShowProfileMenu((prev) => !prev)}
-              className="flex items-center gap-2 rounded-full bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:shadow-md dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700"
-              aria-haspopup="menu"
-              aria-expanded={showProfileMenu}
-            >
-              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-sky-600 text-base font-bold text-white shadow-sm dark:bg-sky-500">
-                {authUser?.email?.[0]?.toUpperCase() || "U"}
-              </span>
-              <span className="hidden text-left text-sm leading-tight sm:block">
-                <span className="block font-semibold">{authUser?.email}</span>
-                <span className="block text-xs text-slate-500 dark:text-slate-400">
-                  {authUser?.role?.replace(/_/g, " ")}
-                </span>
-              </span>
-              <span aria-hidden>{showProfileMenu ? "▲" : "▼"}</span>
-            </button>
-
-            {showProfileMenu && (
-              <div className="absolute right-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
-                <div className="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-100">
-                  <div>{authUser?.email}</div>
-                  <div className="text-xs font-normal text-slate-500 dark:text-slate-400">
-                    {authUser?.role?.replace(/_/g, " ")}
-                  </div>
+    <Router>
+      <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors duration-200 dark:bg-slate-900 dark:text-slate-100">
+        <div className="flex min-h-screen w-full flex-col px-3 py-8 md:px-4 lg:px-5">
+          <AppTopBar
+            authUser={authUser}
+            theme={theme}
+            setTheme={setTheme}
+            showProfileMenu={showProfileMenu}
+            setShowProfileMenu={setShowProfileMenu}
+            showChangePassword={showChangePassword}
+            setShowChangePassword={setShowChangePassword}
+            changePasswordError={changePasswordError}
+            changePasswordSuccess={changePasswordSuccess}
+            currentPassword={currentPassword}
+            setCurrentPassword={setCurrentPassword}
+            newPassword={newPassword}
+            setNewPassword={setNewPassword}
+            confirmPassword={confirmPassword}
+            setConfirmPassword={setConfirmPassword}
+            changingPassword={changingPassword}
+            handleChangePassword={handleChangePassword}
+            handleLogout={handleLogout}
+            handleModeSwitch={handleModeSwitch}
+            handleOpenSettings={handleOpenSettings}
+            roleView={roleView}
+            isViewerLike={isViewerLike}
+            nextThemeLabel={nextThemeLabel}
+            isAdmin={isAdmin}
+            isDeveloper={isDeveloper}
+            isLeader={isLeader}
+            isDeliveryManager={isDeliveryManager}
+          />
+          <main className="mt-10 flex-1 space-y-4">
+            {/* Wizard Launch Button for eligible roles */}
+            {/* {(isAdmin || isLeader || isDeliveryManager || isDeveloper) &&
+              roleView === "chat" && (
+                <div className="mb-6">
+                  <Link
+                    to="/wizard/drafts"
+                    className="inline-block rounded-lg bg-sky-600 px-5 py-2 text-white font-semibold shadow hover:bg-sky-700 transition"
+                  >
+                    + New Job Posting Wizard
+                  </Link>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    handleModeSwitch("chat");
-                    setShowProfileMenu(false);
-                  }}
-                  className={`flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold transition hover:bg-slate-50 dark:hover:bg-slate-700 ${
-                    roleView === "chat" ? "bg-slate-50 dark:bg-slate-700" : ""
-                  }`}
-                >
-                  <span aria-hidden>🏠</span> Dashboard Home
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    handleOpenSettings();
-                    setShowProfileMenu(false);
-                  }}
-                  disabled={isViewerLike}
-                  className={`flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold transition hover:bg-slate-50 dark:hover:bg-slate-700 ${
-                    isViewerLike ? "cursor-not-allowed opacity-60" : ""
-                  }`}
-                  title={
-                    isViewerLike
-                      ? "Settings available for elevated roles"
-                      : "Open settings"
-                  }
-                >
-                  <span aria-hidden>⚙️</span> Settings
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowChangePassword(true);
-                    setShowProfileMenu(false);
-                    setChangePasswordError(null);
-                    setChangePasswordSuccess(null);
-                    setCurrentPassword("");
-                    setNewPassword("");
-                    setConfirmPassword("");
-                  }}
-                  className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold transition hover:bg-slate-50 dark:hover:bg-slate-700"
-                >
-                  <span aria-hidden>🔒</span> Change Password
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTheme(theme === "light" ? "dark" : "light");
-                    setShowProfileMenu(false);
-                  }}
-                  className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold transition hover:bg-slate-50 dark:hover:bg-slate-700"
-                >
-                  <span aria-hidden>{theme === "light" ? "🌙" : "🌞"}</span>
-                  {nextThemeLabel}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowProfileMenu(false);
-                    handleLogout();
-                  }}
-                  className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold text-rose-600 transition hover:bg-rose-50 dark:text-rose-200 dark:hover:bg-rose-900/30"
-                >
-                  <span aria-hidden>🚪</span> Logout
-                </button>
-              </div>
-            )}
-          </div>
-        </header>
-
-        <main className="mt-10 flex-1 space-y-4">
-          {authError && (
-            <p className="text-sm text-red-600 dark:text-red-400">
-              {authError}
-            </p>
-          )}
-
-          {isViewerLike && (
-            <ChatWithDashboard
-              key="viewer"
-              authToken={authToken}
-              authUserRole={authUser?.role}
-              hideChat
+              )} */}
+            <Routes>
+              {/* Main dashboard and admin views */}
+              <Route
+                path="/"
+                element={
+                  <>
+                    {authError && (
+                      <p className="text-sm text-red-600 dark:text-red-400">
+                        {authError}
+                      </p>
+                    )}
+                    {isViewerLike && (
+                      <ChatWithDashboard
+                        key="viewer"
+                        authToken={authToken}
+                        authUserRole={authUser?.role}
+                        hideChat
+                      />
+                    )}
+                    {(isLeader || isDeliveryManager) &&
+                      (roleView === "leader" ? (
+                        <AdminPanel
+                          key="leader-admin"
+                          authToken={authToken!}
+                          authUserRole={authUser.role}
+                          allowedSections={["dashboard", "banners"]}
+                        />
+                      ) : (
+                        <ChatWithDashboard
+                          key="leader-chat"
+                          authToken={authToken}
+                          authUserRole={authUser.role}
+                          hideChat
+                        />
+                      ))}
+                    {isAdmin &&
+                      (roleView === "admin" ? (
+                        <AdminPanel
+                          key="admin"
+                          authToken={authToken!}
+                          authUserRole={authUser.role}
+                        />
+                      ) : (
+                        <ChatWithDashboard
+                          key={`admin-${roleView}`}
+                          authToken={authToken}
+                          authUserRole={authUser.role}
+                          hideChat
+                        />
+                      ))}
+                    {isDeveloper &&
+                      (roleView === "developer" ? (
+                        <AdminPanel
+                          key="developer-admin"
+                          authToken={authToken!}
+                          authUserRole={authUser.role}
+                        />
+                      ) : (
+                        <ChatWithDashboard
+                          key={`developer-${roleView}`}
+                          authToken={authToken}
+                          authUserRole={authUser.role}
+                          hideChat
+                        />
+                      ))}
+                  </>
+                }
+              />
+              {/* Wizard routes */}
+              <Route path="/wizard/*" element={<WizardRouter />} />
+            </Routes>
+          </main>
+        </div>
+        {/* Floating chat launcher */}
+        <button
+          type="button"
+          onClick={() => setShowFloatingChat(true)}
+          className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-sky-600 text-2xl text-white shadow-xl transition hover:scale-105 hover:bg-sky-700 focus:outline-none focus:ring-4 focus:ring-sky-200 dark:bg-sky-500 dark:hover:bg-sky-400 dark:focus:ring-sky-800"
+          aria-label="Open chat"
+        >
+          💬
+        </button>
+        {showFloatingChat && (
+          <>
+            <div
+              className="fixed inset-0 z-40 bg-slate-900/30"
+              onClick={() => setShowFloatingChat(false)}
             />
-          )}
-
-          {(isLeader || isDeliveryManager) &&
-            (roleView === "leader" ? (
-              <AdminPanel
-                key="leader-admin"
-                authToken={authToken!}
-                authUserRole={authUser.role}
-                allowedSections={["dashboard", "banners"]}
-              />
-            ) : (
-              <ChatWithDashboard
-                key="leader-chat"
-                authToken={authToken}
-                authUserRole={authUser.role}
-                hideChat
-              />
-            ))}
-
-          {isAdmin &&
-            (roleView === "admin" ? (
-              <AdminPanel
-                key="admin"
-                authToken={authToken!}
-                authUserRole={authUser.role}
-              />
-            ) : (
-              <ChatWithDashboard
-                key={`admin-${roleView}`}
-                authToken={authToken}
-                authUserRole={authUser.role}
-                hideChat
-              />
-            ))}
-
-          {isDeveloper &&
-            (roleView === "developer" ? (
-              <AdminPanel
-                key="developer-admin"
-                authToken={authToken!}
-                authUserRole={authUser.role}
-              />
-            ) : (
-              <ChatWithDashboard
-                key={`developer-${roleView}`}
-                authToken={authToken}
-                authUserRole={authUser.role}
-                hideChat
-              />
-            ))}
-        </main>
-      </div>
-
-      {/* Floating chat launcher */}
-      <button
-        type="button"
-        onClick={() => setShowFloatingChat(true)}
-        className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-sky-600 text-2xl text-white shadow-xl transition hover:scale-105 hover:bg-sky-700 focus:outline-none focus:ring-4 focus:ring-sky-200 dark:bg-sky-500 dark:hover:bg-sky-400 dark:focus:ring-sky-800"
-        aria-label="Open chat"
-      >
-        💬
-      </button>
-
-      {showFloatingChat && (
-        <>
-          <div
-            className="fixed inset-0 z-40 bg-slate-900/30"
-            onClick={() => setShowFloatingChat(false)}
-          />
-          <div className="fixed bottom-6 right-6 z-50 w-[90vw] max-w-6xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-            <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100">
-              <span>Chat</span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowFloatingChat(false)}
-                  className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                >
-                  Close
-                </button>
+            <div className="fixed bottom-6 right-6 z-50 w-[90vw] max-w-6xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+              <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100">
+                <span>Chat</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowFloatingChat(false)}
+                    className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+              <div className="h-[70vh] overflow-hidden bg-white dark:bg-slate-900">
+                <ChatWindow
+                  key="floating-chat"
+                  authToken={authToken}
+                  showSql={isDeveloper}
+                  heightClass="h-full max-h-full"
+                />
               </div>
             </div>
-            <div className="h-[70vh] overflow-hidden bg-white dark:bg-slate-900">
-              <ChatWindow
-                key="floating-chat"
-                authToken={authToken}
-                showSql={isDeveloper}
-                heightClass="h-full max-h-full"
-              />
-            </div>
-          </div>
-        </>
-      )}
-
-      {showChangePassword && (
-        <>
-          <div
-            className="fixed inset-0 z-40 bg-slate-900/40"
-            onClick={() => setShowChangePassword(false)}
-          />
-          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-            <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <h3 className="text-lg font-semibold text-slate-800 dark:text-slate-100">
-                    Change Password
-                  </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Update your account password.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowChangePassword(false)}
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                >
-                  Close
-                </button>
-              </div>
-
-              <form className="space-y-3" onSubmit={handleChangePassword}>
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
-                    Current Password
-                  </label>
-                  <input
-                    type="password"
-                    value={currentPassword}
-                    onChange={(e) => setCurrentPassword(e.target.value)}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                    required
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
-                    New Password
-                  </label>
-                  <input
-                    type="password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                    minLength={6}
-                    required
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
-                    Confirm New Password
-                  </label>
-                  <input
-                    type="password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-                    minLength={6}
-                    required
-                  />
-                </div>
-
-                {changePasswordError && (
-                  <p className="text-sm text-rose-600 dark:text-rose-400">
-                    {changePasswordError}
-                  </p>
-                )}
-                {changePasswordSuccess && (
-                  <p className="text-sm text-emerald-600 dark:text-emerald-400">
-                    {changePasswordSuccess}
-                  </p>
-                )}
-
-                <div className="flex items-center justify-end gap-2">
+          </>
+        )}
+        {showChangePassword && (
+          <>
+            <div
+              className="fixed inset-0 z-40 bg-slate-900/40"
+              onClick={() => setShowChangePassword(false)}
+            />
+            <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+              <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-800 dark:text-slate-100">
+                      Change Password
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Update your account password.
+                    </p>
+                  </div>
                   <button
                     type="button"
                     onClick={() => setShowChangePassword(false)}
-                    className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
                   >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={changingPassword}
-                    className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-700 disabled:opacity-60"
-                  >
-                    {changingPassword ? "Updating…" : "Update Password"}
+                    Close
                   </button>
                 </div>
-              </form>
+                <form className="space-y-3" onSubmit={handleChangePassword}>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                      Current Password
+                    </label>
+                    <input
+                      type="password"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                      New Password
+                    </label>
+                    <input
+                      type="password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                      minLength={6}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                      Confirm New Password
+                    </label>
+                    <input
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                      minLength={6}
+                      required
+                    />
+                  </div>
+                  {changePasswordError && (
+                    <p className="text-sm text-rose-600 dark:text-rose-400">
+                      {changePasswordError}
+                    </p>
+                  )}
+                  {changePasswordSuccess && (
+                    <p className="text-sm text-emerald-600 dark:text-emerald-400">
+                      {changePasswordSuccess}
+                    </p>
+                  )}
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowChangePassword(false)}
+                      className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={changingPassword}
+                      className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-700 disabled:opacity-60"
+                    >
+                      {changingPassword ? "Updating…" : "Update Password"}
+                    </button>
+                  </div>
+                </form>
+              </div>
             </div>
-          </div>
-        </>
-      )}
-    </div>
+          </>
+        )}
+      </div>
+    </Router>
   );
 };
 

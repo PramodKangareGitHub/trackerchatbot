@@ -68,6 +68,7 @@ type DashboardConfigSectionProps = {
   handleCancelEditWidget: () => void;
   getWidgetKey: (widget: Widget, index: number) => string;
   groupOptionsKey: (widgetKey: string, type: WidgetType) => string;
+  filterOptionsKey: (widgetKey: string, type: WidgetType) => string;
   getTableConfig: (widget: Widget) => TableConfig;
   getChartConfig: (widget: Widget) => ChartConfig;
   fetchGroupByValues: (
@@ -123,6 +124,7 @@ const DashboardConfigSection = ({
   handleCancelEditWidget,
   getWidgetKey,
   groupOptionsKey,
+  filterOptionsKey,
   getTableConfig,
   getChartConfig,
   fetchGroupByValues,
@@ -319,6 +321,8 @@ const DashboardConfigSection = ({
           scopedWidgets.map(
             ({ widget: w, widgetIdx: idx, widgetKey, widgetType }) => {
               const optionsKey = groupOptionsKey(widgetKey, widgetType);
+              const tableFilterKey = filterOptionsKey(widgetKey, "table");
+              const chartFilterKey = filterOptionsKey(widgetKey, "chart");
               const isEditing = editingWidgetId === widgetKey;
               const isSavingThis = savingWidgetId === widgetKey;
               const isCollapsed =
@@ -327,13 +331,31 @@ const DashboardConfigSection = ({
                 widgetType === "table"
                   ? getTableConfig(w).group_by_values || []
                   : getChartConfig(w).group_by_values || [];
+              const savedTableFilterValues =
+                getTableConfig(w).filter_values || [];
+              const savedChartFilterValues =
+                getChartConfig(w).filter_values || [];
               const distinctOptions = Array.from(
                 new Set([
                   ...(groupValueOptions[optionsKey] || []),
                   ...savedGroupValues,
                 ])
               );
+              const tableFilterOptions = Array.from(
+                new Set([
+                  ...(groupValueOptions[tableFilterKey] || []),
+                  ...savedTableFilterValues,
+                ])
+              );
+              const chartFilterOptions = Array.from(
+                new Set([
+                  ...(groupValueOptions[chartFilterKey] || []),
+                  ...savedChartFilterValues,
+                ])
+              );
               const isGroupLoading = groupValueLoading[optionsKey];
+              const isTableFilterLoading = groupValueLoading[tableFilterKey];
+              const isChartFilterLoading = groupValueLoading[chartFilterKey];
               const tableConfig = getTableConfig(w);
               const chartConfig = getChartConfig(w);
               const tableDataset = datasets.find(
@@ -352,6 +374,8 @@ const DashboardConfigSection = ({
                         fields: [],
                         group_by: "",
                         group_by_values: [],
+                        filter_by: "",
+                        filter_values: [],
                       }
                     : {
                         dataset_id: defaultDataset,
@@ -360,6 +384,8 @@ const DashboardConfigSection = ({
                         y_field: "",
                         group_by: "",
                         group_by_values: [],
+                        filter_by: "",
+                        filter_values: [],
                       };
 
                 updateWidget(idx, {
@@ -625,6 +651,104 @@ const DashboardConfigSection = ({
 
                           <div className="flex flex-wrap items-center gap-2">
                             <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                              Filter By
+                            </label>
+                            <select
+                              value={tableConfig.filter_by || ""}
+                              onChange={(e) => {
+                                const col = e.target.value;
+                                updateTableConfig({
+                                  filter_by: col,
+                                  filter_values: [],
+                                });
+                                const key = filterOptionsKey(
+                                  widgetKey,
+                                  "table"
+                                );
+                                setGroupValueOptions((prev) => ({
+                                  ...prev,
+                                  [key]: [],
+                                }));
+                                if (!col) return;
+                                fetchGroupByValues(
+                                  `${widgetKey}-filter`,
+                                  "table",
+                                  tableConfig.dataset_id || "",
+                                  col,
+                                  (values) =>
+                                    updateTableConfig({
+                                      filter_by: col,
+                                      filter_values: values,
+                                    })
+                                );
+                              }}
+                              disabled={!isEditing}
+                              className="min-w-[180px] rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                            >
+                              <option value="">None</option>
+                              {tableDataset?.columns.map((col) => (
+                                <option key={col} value={col}>
+                                  {col}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {tableConfig.filter_by && (
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                                <span>Filter Values</span>
+                                {isTableFilterLoading && (
+                                  <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                                    Loading...
+                                  </span>
+                                )}
+                                {!isTableFilterLoading &&
+                                  !tableFilterOptions.length && (
+                                    <span className="text-[11px] text-amber-600 dark:text-amber-200">
+                                      No values found
+                                    </span>
+                                  )}
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {tableFilterOptions.map((val) => {
+                                  const checked =
+                                    tableConfig.filter_values?.includes(val) ??
+                                    false;
+                                  return (
+                                    <label
+                                      key={val}
+                                      className={`flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold shadow-sm transition ${
+                                        checked
+                                          ? "border-sky-500 bg-sky-50 text-sky-700 dark:border-sky-400 dark:bg-sky-900/30 dark:text-sky-100"
+                                          : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                      }`}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={() => {
+                                          const current =
+                                            tableConfig.filter_values || [];
+                                          const next = checked
+                                            ? current.filter((v) => v !== val)
+                                            : [...current, val];
+                                          updateTableConfig({
+                                            filter_values: next,
+                                          });
+                                        }}
+                                        disabled={!isEditing}
+                                      />
+                                      {val}
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
                               Group By
                             </label>
                             <select
@@ -811,6 +935,105 @@ const DashboardConfigSection = ({
                                   ))}
                                 </select>
                               </div>
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                                  Filter By (optional)
+                                </label>
+                                <select
+                                  value={chartConfig.filter_by || ""}
+                                  onChange={(e) => {
+                                    const col = e.target.value;
+                                    updateChartConfig({
+                                      filter_by: col,
+                                      filter_values: [],
+                                    });
+                                    const key = filterOptionsKey(
+                                      widgetKey,
+                                      "chart"
+                                    );
+                                    setGroupValueOptions((prev) => ({
+                                      ...prev,
+                                      [key]: [],
+                                    }));
+                                    if (!col) return;
+                                    fetchGroupByValues(
+                                      `${widgetKey}-filter`,
+                                      "chart",
+                                      chartConfig.dataset_id || "",
+                                      col,
+                                      (values) =>
+                                        updateChartConfig({
+                                          filter_by: col,
+                                          filter_values: values,
+                                        })
+                                    );
+                                  }}
+                                  disabled={!isEditing}
+                                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                >
+                                  <option value="">None</option>
+                                  {chartDataset.columns.map((col) => (
+                                    <option key={col} value={col}>
+                                      {col}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              {chartConfig.filter_by && chartDataset && (
+                                <div className="space-y-2">
+                                  <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                                    <span>Filter Values</span>
+                                    {isChartFilterLoading && (
+                                      <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                                        Loading...
+                                      </span>
+                                    )}
+                                    {!isChartFilterLoading &&
+                                      !chartFilterOptions.length && (
+                                        <span className="text-[11px] text-amber-600 dark:text-amber-200">
+                                          No values found
+                                        </span>
+                                      )}
+                                  </div>
+                                  <div className="flex flex-wrap gap-2">
+                                    {chartFilterOptions.map((val) => {
+                                      const checked =
+                                        chartConfig.filter_values?.includes(
+                                          val
+                                        ) ?? false;
+                                      return (
+                                        <label
+                                          key={val}
+                                          className={`flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold shadow-sm transition ${
+                                            checked
+                                              ? "border-sky-500 bg-sky-50 text-sky-700 dark:border-sky-400 dark:bg-sky-900/30 dark:text-sky-100"
+                                              : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                          }`}
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onChange={() => {
+                                              const current =
+                                                chartConfig.filter_values || [];
+                                              const next = checked
+                                                ? current.filter(
+                                                    (v) => v !== val
+                                                  )
+                                                : [...current, val];
+                                              updateChartConfig({
+                                                filter_values: next,
+                                              });
+                                            }}
+                                            disabled={!isEditing}
+                                          />
+                                          {val}
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
                               <div className="space-y-1">
                                 <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
                                   Group By (optional)

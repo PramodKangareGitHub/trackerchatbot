@@ -17,8 +17,14 @@ const pieColors = [
   "#ec4899",
 ];
 
-const isAgeing = (col: string) =>
-  col.toLowerCase().replace(/[^a-z0-9]+/g, "_") === "ageing_as_on_today";
+const normalize = (col: string) =>
+  col.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+const isAgeing = (col: string) => normalize(col) === "ageing_as_on_today";
+const isDateCol = (col: string) => normalize(col) === "jp_posting_date_to_hcl";
+const hasQuarterVal = (values: string[]) =>
+  values.some((v) => /^Q[1-4]$/.test(v));
+const hasDayRangeVal = (values: string[]) =>
+  values.some((v) => /^\d+\s*-\s*\d+$/.test(v) || /^\d+\+$/.test(v));
 
 const bucketAgeLabel = (val: unknown) => {
   const num = Number(val);
@@ -46,6 +52,44 @@ const matchesAgeRange = (num: number, label: string) => {
   return String(num) === trimmed;
 };
 
+const toQuarterLabel = (val: unknown) => {
+  if (val === null || val === undefined) return "(blank)";
+  const parsed = new Date(String(val));
+  if (Number.isNaN(parsed.getTime())) return String(val);
+  const q = Math.floor(parsed.getMonth() / 3) + 1;
+  if (q < 1 || q > 4) return String(val);
+  return `Q${q}`;
+};
+
+const toLabel = (col: string, selectedValues: string[], val: unknown) => {
+  if (isAgeing(col)) return bucketAgeLabel(val);
+  if (isDateCol(col)) {
+    const quarterLabel = toQuarterLabel(val);
+    const dayLabel = (() => {
+      if (val === null || val === undefined) return "(blank)";
+      const parsed = new Date(String(val));
+      if (Number.isNaN(parsed.getTime())) return String(val);
+      const diffMs = Date.now() - parsed.getTime();
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      if (!Number.isFinite(diffDays)) return String(val);
+      if (diffDays <= 30) return "0-30";
+      if (diffDays <= 60) return "31-60";
+      if (diffDays <= 90) return "61-90";
+      return "90+";
+    })();
+    const hasDay = hasDayRangeVal(selectedValues);
+    const hasQuarter = hasQuarterVal(selectedValues);
+    if (hasDay && hasQuarter) {
+      if (selectedValues.includes(dayLabel)) return dayLabel;
+      if (selectedValues.includes(quarterLabel)) return quarterLabel;
+      return dayLabel;
+    }
+    if (hasDay) return dayLabel;
+    if (hasQuarter) return quarterLabel;
+  }
+  return val === null || val === undefined ? "(blank)" : String(val);
+};
+
 const matchesGroup = (
   groupBy: string,
   groupValues: string[],
@@ -57,8 +101,16 @@ const matchesGroup = (
     if (!Number.isFinite(num)) return false;
     return groupValues.some((gv) => matchesAgeRange(num, gv));
   }
-  const label =
-    rowVal === null || rowVal === undefined ? "(blank)" : String(rowVal);
+  if (isDateCol(groupBy)) {
+    const quarterLabel = toQuarterLabel(rowVal);
+    const dayLabel = toLabel(groupBy, ["0-30"], rowVal);
+    const rawLabel =
+      rowVal === null || rowVal === undefined ? "(blank)" : String(rowVal);
+    return groupValues.some(
+      (v) => v === quarterLabel || v === dayLabel || v === rawLabel
+    );
+  }
+  const label = toLabel(groupBy, groupValues, rowVal);
   return groupValues.includes(label);
 };
 
@@ -69,8 +121,36 @@ const PreviewChart = ({
 }: PreviewChartProps) => {
   const groupBy = chartConfig.group_by || "";
   const groupValues = chartConfig.group_by_values || [];
+  const filterBy = chartConfig.filter_by || "";
+  const filterValues = chartConfig.filter_values || [];
 
-  const rowsFiltered = data.rows.filter((row) => {
+  const matchesSelection = (col: string, values: string[], rowVal: unknown) => {
+    if (!values.length) return true;
+    if (isAgeing(col)) {
+      const num = Number(rowVal);
+      if (!Number.isFinite(num)) return false;
+      return values.some((gv) => matchesAgeRange(num, gv));
+    }
+    if (isDateCol(col)) {
+      const quarterLabel = toQuarterLabel(rowVal);
+      const dayLabel = toLabel(col, ["0-30"], rowVal);
+      const rawLabel =
+        rowVal === null || rowVal === undefined ? "(blank)" : String(rowVal);
+      return values.some(
+        (v) => v === quarterLabel || v === dayLabel || v === rawLabel
+      );
+    }
+    const label = toLabel(col, values, rowVal);
+    return values.includes(label);
+  };
+
+  const rowsAfterFilter = filterBy
+    ? data.rows.filter((row) =>
+        matchesSelection(filterBy, filterValues, row[filterBy])
+      )
+    : data.rows;
+
+  const rowsFiltered = rowsAfterFilter.filter((row) => {
     if (!groupBy) return true;
     const key = row[groupBy];
     return matchesGroup(groupBy, groupValues, key);
@@ -116,11 +196,7 @@ const PreviewChart = ({
 
     const groupLabelRaw = groupBy ? row[groupBy] : undefined;
     const groupLabel = groupBy
-      ? isAgeing(groupBy)
-        ? bucketAgeLabel(groupLabelRaw)
-        : groupLabelRaw === null || groupLabelRaw === undefined
-          ? "(blank)"
-          : String(groupLabelRaw)
+      ? toLabel(groupBy, groupValues, groupLabelRaw)
       : "";
 
     const bucketLabel = groupBy ? `${xLabel} | ${groupLabel}` : xLabel;

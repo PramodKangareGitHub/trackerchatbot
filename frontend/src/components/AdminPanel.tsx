@@ -394,10 +394,11 @@ const AdminPanel = ({
     setPreviewLoading(true);
     setPreviewError(null);
     try {
+      const filterQs = buildFilterQuery(config);
       const data = await api<{
         columns: string[];
         rows: Record<string, unknown>[];
-      }>(`/api/admin/datasets/${datasetId}/records?limit=50`);
+      }>(`/api/admin/datasets/${datasetId}/records?limit=50${filterQs}`);
       setPreviewData({ columns: data.columns || [], rows: data.rows || [] });
     } catch (err) {
       setPreviewError(err instanceof Error ? err.message : String(err));
@@ -700,6 +701,8 @@ const AdminPanel = ({
       fields: base.fields || [],
       group_by: base.group_by || "",
       group_by_values: base.group_by_values || [],
+      filter_by: base.filter_by || "",
+      filter_values: base.filter_values || [],
     };
   };
 
@@ -712,6 +715,8 @@ const AdminPanel = ({
       chart_type: base.chart_type || "bar",
       group_by: base.group_by || "",
       group_by_values: base.group_by_values || [],
+      filter_by: base.filter_by || "",
+      filter_values: base.filter_values || [],
     };
   };
 
@@ -720,6 +725,9 @@ const AdminPanel = ({
 
   const groupOptionsKey = (widgetKey: string, type: WidgetType) =>
     `${type}-${widgetKey}`;
+
+  const filterOptionsKey = (widgetKey: string, type: WidgetType) =>
+    `${groupOptionsKey(widgetKey, type)}-filter`;
 
   const fetchGroupByValues = async (
     widgetKey: string,
@@ -746,6 +754,7 @@ const AdminPanel = ({
       const normalize = (s: string) =>
         s.toLowerCase().replace(/[^a-z0-9]+/g, "_");
       const isAgeing = normalize(column) === "ageing_as_on_today";
+      const isQuarterDate = normalize(column) === "jp_posting_date_to_hcl";
 
       const bucketAgeing = (vals: string[]) => {
         const buckets = new Set<string>();
@@ -761,7 +770,32 @@ const AdminPanel = ({
         return order.filter((b) => buckets.has(b));
       };
 
-      const values = isAgeing ? bucketAgeing(rawValues) : rawValues;
+      const quarterFromDate = (v: string) => {
+        const parsed = new Date(v);
+        if (Number.isNaN(parsed.getTime())) return null;
+        const q = Math.floor(parsed.getMonth() / 3) + 1;
+        if (q < 1 || q > 4) return null;
+        return `Q${q}`;
+      };
+
+      const quarterValues = () => {
+        const seen = new Set<string>();
+        rawValues.forEach((v) => {
+          const q = quarterFromDate(v);
+          if (q) seen.add(q);
+        });
+        const order = ["Q1", "Q2", "Q3", "Q4"];
+        const inData = order.filter((q) => seen.has(q));
+        return inData.length ? inData : order;
+      };
+
+      const dayRangeValues = () => ["0-30", "31-60", "61-90", "90+"];
+
+      const values = isAgeing
+        ? bucketAgeing(rawValues)
+        : isQuarterDate
+          ? [...quarterValues(), ...dayRangeValues()]
+          : rawValues;
 
       setGroupValueOptions((prev) => ({ ...prev, [key]: values }));
       onValues(values);
@@ -772,6 +806,33 @@ const AdminPanel = ({
     } finally {
       setGroupValueLoading((prev) => ({ ...prev, [key]: false }));
     }
+  };
+
+  const buildFilterQuery = (config: {
+    filter_by?: string;
+    filter_values?: string[];
+  }) => {
+    if (!config.filter_by || !(config.filter_values || []).length) return "";
+    const normalize = (s: string) =>
+      s.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+    const isDateBucket =
+      normalize(config.filter_by) === "jp_posting_date_to_hcl";
+    const vals = config.filter_values || [];
+    const isQuarterVals = vals.every((v) => /^Q[1-4]$/.test(v));
+    const isDayRangeVals = vals.every(
+      (v) => /^\d+\s*-\s*\d+$/.test(v) || /^\d+\+$/.test(v)
+    );
+    if (isDateBucket && (isQuarterVals || isDayRangeVals)) {
+      // Derived buckets; filter on client side only.
+      return "";
+    }
+    const params = new URLSearchParams();
+    params.set("filter_by", config.filter_by);
+    (config.filter_values || []).forEach((v) =>
+      params.append("filter_values", v)
+    );
+    const qs = params.toString();
+    return qs ? `&${qs}` : "";
   };
 
   // Ensure saved group-by selections repopulate their distinct value lists on load
@@ -853,6 +914,8 @@ const AdminPanel = ({
             fields: [],
             group_by: "",
             group_by_values: [],
+            filter_by: "",
+            filter_values: [],
           }
         : {
             dataset_id: defaultDataset,
@@ -861,6 +924,8 @@ const AdminPanel = ({
             y_field: "",
             group_by: "",
             group_by_values: [],
+            filter_by: "",
+            filter_values: [],
           };
 
     setWidgets((prev) => [
@@ -1262,6 +1327,7 @@ const AdminPanel = ({
             handleCancelEditWidget={handleCancelEditWidget}
             getWidgetKey={getWidgetKey}
             groupOptionsKey={groupOptionsKey}
+            filterOptionsKey={filterOptionsKey}
             getTableConfig={getTableConfig}
             getChartConfig={getChartConfig}
             fetchGroupByValues={fetchGroupByValues}
