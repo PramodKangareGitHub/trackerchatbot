@@ -231,17 +231,21 @@ def _inject_filters(sql: str, filters: list[dict[str, Any]]) -> tuple[str, Dict[
 
             # Support quarter buckets for date columns (e.g., Q3, quarter3)
             if col_canon in DATE_BUCKET_CANONICAL:
-                q_match = re.match(r"^(?:quarter:)?q?([1-4])$", trimmed_value, flags=re.IGNORECASE)
+                q_match = re.match(r"^(?:quarter:)?q?([1-4])(?:\s+(\d{4}))?$", trimmed_value, flags=re.IGNORECASE)
                 if q_match:
                     q_num = int(q_match.group(1))
+                    q_year = q_match.group(2)
                     start_month = (q_num - 1) * 3 + 1
                     end_month = start_month + 2
                     month_expr = f"CAST(STRFTIME('%m', {_normalized_date_expr(column)}) AS INTEGER)"
-                    clauses.append(
-                        f"({month_expr} >= :{param_key}_mstart AND {month_expr} <= :{param_key}_mend)"
-                    )
+                    date_expr = _normalized_date_expr(column)
+                    parts = [f"{month_expr} >= :{param_key}_mstart", f"{month_expr} <= :{param_key}_mend"]
                     params[f"{param_key}_mstart"] = start_month
                     params[f"{param_key}_mend"] = end_month
+                    if q_year:
+                        parts.append(f"CAST(STRFTIME('%Y', {date_expr}) AS INTEGER) = :{param_key}_year")
+                        params[f"{param_key}_year"] = int(q_year)
+                    clauses.append(f"({' AND '.join(parts)})")
                     continue
 
             # General range support (e.g., "range:1-5", "range:10+"), casting column to NUMERIC

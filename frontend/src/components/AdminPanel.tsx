@@ -395,10 +395,11 @@ const AdminPanel = ({
     setPreviewError(null);
     try {
       const filterQs = buildFilterQuery(config);
+      const limit = config.group_by ? 2000 : 50;
       const data = await api<{
         columns: string[];
         rows: Record<string, unknown>[];
-      }>(`/api/admin/datasets/${datasetId}/records?limit=50${filterQs}`);
+      }>(`/api/admin/datasets/${datasetId}/records?limit=${limit}${filterQs}`);
       setPreviewData({ columns: data.columns || [], rows: data.rows || [] });
     } catch (err) {
       setPreviewError(err instanceof Error ? err.message : String(err));
@@ -781,12 +782,34 @@ const AdminPanel = ({
       const quarterValues = () => {
         const seen = new Set<string>();
         rawValues.forEach((v) => {
-          const q = quarterFromDate(v);
-          if (q) seen.add(q);
+          const parsed = new Date(v);
+          if (Number.isNaN(parsed.getTime())) return;
+          const q = Math.floor(parsed.getMonth() / 3) + 1;
+          const year = parsed.getFullYear();
+          if (q < 1 || q > 4 || !Number.isFinite(year)) return;
+          seen.add(`Q${q} ${year}`);
         });
-        const order = ["Q1", "Q2", "Q3", "Q4"];
-        const inData = order.filter((q) => seen.has(q));
-        return inData.length ? inData : order;
+
+        const ordered = Array.from(seen).sort((a, b) => {
+          const [qa, ya] = a.split(" ");
+          const [qb, yb] = b.split(" ");
+          const qaNum = Number(qa.replace("Q", ""));
+          const qbNum = Number(qb.replace("Q", ""));
+          const yaNum = Number(ya);
+          const ybNum = Number(yb);
+          if (yaNum !== ybNum) return yaNum - ybNum;
+          return qaNum - qbNum;
+        });
+
+        if (ordered.length) return ordered;
+
+        const currentYear = new Date().getFullYear();
+        return [
+          `Q1 ${currentYear}`,
+          `Q2 ${currentYear}`,
+          `Q3 ${currentYear}`,
+          `Q4 ${currentYear}`,
+        ];
       };
 
       const dayRangeValues = () => ["0-30", "31-60", "61-90", "90+"];
@@ -818,7 +841,8 @@ const AdminPanel = ({
     const isDateBucket =
       normalize(config.filter_by) === "jp_posting_date_to_hcl";
     const vals = config.filter_values || [];
-    const isQuarterVals = vals.every((v) => /^Q[1-4]$/.test(v));
+    const quarterPattern = /^Q[1-4](?:\s+\d{4})?$/i;
+    const isQuarterVals = vals.every((v) => quarterPattern.test(v));
     const isDayRangeVals = vals.every(
       (v) => /^\d+\s*-\s*\d+$/.test(v) || /^\d+\+$/.test(v)
     );

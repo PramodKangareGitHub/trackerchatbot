@@ -223,8 +223,17 @@ const ChatWithDashboard = ({
     const isAgeing = (col: string) => normalize(col) === "ageing_as_on_today";
     const isDateCol = (col: string) =>
       normalize(col) === "jp_posting_date_to_hcl";
+    const quarterMatch = (v: string) => {
+      const m = v.match(/^Q([1-4])(?:\s+(\d{4}))?$/i);
+      if (!m) return null;
+      const q = Number(m[1]);
+      const yr = m[2] ? Number(m[2]) : null;
+      return { q, year: yr };
+    };
     const hasQuarterVal = (values: string[]) =>
-      values.some((v) => /^Q[1-4]$/.test(v));
+      values.some((v) => Boolean(quarterMatch(v)));
+    const hasQuarterValWithYear = (values: string[]) =>
+      values.some((v) => Boolean(quarterMatch(v)?.year));
     const hasDayRangeVal = (values: string[]) =>
       values.some((v) => /^\d+\s*-\s*\d+$/.test(v) || /^\d+\+$/.test(v));
 
@@ -254,13 +263,15 @@ const ChatWithDashboard = ({
       return String(num) === trimmed;
     };
 
-    const toQuarterLabel = (val: unknown) => {
+    const toQuarterLabel = (val: unknown, withYear = false) => {
       if (val === null || val === undefined) return "(blank)";
       const parsed = new Date(String(val));
       if (Number.isNaN(parsed.getTime())) return String(val);
-      const q = Math.floor(parsed.getMonth() / 3) + 1;
-      if (q < 1 || q > 4) return String(val);
-      return `Q${q}`;
+      // Use UTC to avoid timezone shifting year/month
+      const q = Math.floor(parsed.getUTCMonth() / 3) + 1;
+      const year = parsed.getUTCFullYear();
+      if (q < 1 || q > 4 || !Number.isFinite(year)) return String(val);
+      return withYear ? `Q${q} ${year}` : `Q${q}`;
     };
 
     const toDayRangeLabel = (val: unknown) => {
@@ -284,16 +295,24 @@ const ChatWithDashboard = ({
       if (isAgeing(col)) return bucketAgeLabel(val);
       if (isDateCol(col)) {
         const hasQuarter = hasQuarterVal(selectedValues);
+        const hasQuarterYear = hasQuarterValWithYear(selectedValues);
         const hasDayRanges = hasDayRangeVal(selectedValues);
-        const quarterLabel = toQuarterLabel(val);
+        const quarterLabel = toQuarterLabel(val, false);
+        const quarterLabelYear = toQuarterLabel(val, true);
         const dayLabel = toDayRangeLabel(val);
         if (hasDayRanges && hasQuarter) {
           if (selectedValues.includes(dayLabel)) return dayLabel;
+          if (hasQuarterYear && selectedValues.includes(quarterLabelYear))
+            return quarterLabelYear;
           if (selectedValues.includes(quarterLabel)) return quarterLabel;
+          if (hasQuarterYear) return quarterLabelYear;
           return dayLabel;
         }
         if (hasDayRanges) return dayLabel;
-        if (hasQuarter) return quarterLabel;
+        if (hasQuarter) {
+          if (hasQuarterYear) return quarterLabelYear;
+          return quarterLabel;
+        }
       }
       return val === null || val === undefined ? "(blank)" : String(val);
     };
@@ -304,22 +323,35 @@ const ChatWithDashboard = ({
       rowVal: unknown
     ) => {
       if (!selectedValues.length) return true;
+      const norm = (v: unknown) =>
+        typeof v === "string"
+          ? v.trim().toLowerCase()
+          : String(v ?? "")
+              .trim()
+              .toLowerCase();
       if (isAgeing(col)) {
         const num = Number(rowVal);
         if (!Number.isFinite(num)) return false;
         return selectedValues.some((gv) => matchesAgeRange(num, gv));
       }
       if (isDateCol(col)) {
-        const quarterLabel = toQuarterLabel(rowVal);
+        const quarterLabel = toQuarterLabel(rowVal, false);
+        const quarterLabelYear = toQuarterLabel(rowVal, true);
         const dayLabel = toDayRangeLabel(rowVal);
         const rawLabel =
           rowVal === null || rowVal === undefined ? "(blank)" : String(rowVal);
-        return selectedValues.some(
-          (v) => v === quarterLabel || v === dayLabel || v === rawLabel
-        );
+        return selectedValues.some((v) => {
+          const nv = norm(v);
+          return (
+            nv === norm(quarterLabel) ||
+            nv === norm(quarterLabelYear) ||
+            nv === norm(dayLabel) ||
+            nv === norm(rawLabel)
+          );
+        });
       }
       const label = toLabelFor(col, selectedValues, rowVal);
-      return selectedValues.includes(label);
+      return selectedValues.some((v) => norm(v) === norm(label));
     };
 
     const rowsAfterFilter = filterBy
@@ -391,18 +423,48 @@ const ChatWithDashboard = ({
   const buildFilterQuery = (cfg: any) => {
     const filterBy = cfg.filter_by || "";
     const filterValues: string[] = cfg.filter_values || [];
+    const groupBy = cfg.group_by || "";
+    const groupValues: string[] = cfg.group_by_values || [];
     if (!filterBy || !filterValues.length) return "";
     const normalize = (s: string) =>
       s.toLowerCase().replace(/[^a-z0-9]+/g, "_");
     const isDateBucket = normalize(filterBy) === "jp_posting_date_to_hcl";
-    const isQuarterVals = filterValues.every((v) => /^Q[1-4]$/.test(v));
+    const quarterPattern = /^Q[1-4](?:\s+\d{4})?$/i;
+    const isQuarterVals = filterValues.every((v) => quarterPattern.test(v));
     const isDayRangeVals = filterValues.every(
       (v) => /^\d+\s*-\s*\d+$/.test(v) || /^\d+\+$/.test(v)
     );
+    // Derived buckets: don't send to backend when explicitly filtering on date bucket
     if (isDateBucket && (isQuarterVals || isDayRangeVals)) return "";
+
     const params = new URLSearchParams();
-    params.set("filter_by", filterBy);
-    filterValues.forEach((v) => params.append("filter_values", v));
+    let targetFilterBy = filterBy;
+    let targetValues = filterValues;
+
+    // If no server-side filter is set but group_by is a date bucket with quarter selections, send a derived filter
+    if (
+      !filterBy &&
+      groupBy &&
+      normalize(groupBy) === "jp_posting_date_to_hcl"
+    ) {
+      const isGroupQuarterVals =
+        groupValues.length > 0 &&
+        groupValues.every((v) => quarterPattern.test(v));
+      if (isGroupQuarterVals) {
+        targetFilterBy = groupBy;
+        targetValues = groupValues.map((v) => {
+          const parts = v.trim().split(/\s+/);
+          const qpart = parts[0] || v;
+          const year = parts[1];
+          return year
+            ? `quarter:${qpart.replace(/^Q/i, "Q")} ${year}`
+            : `quarter:${qpart.replace(/^Q/i, "Q")}`;
+        });
+      }
+    }
+
+    params.set("filter_by", targetFilterBy);
+    targetValues.forEach((v) => params.append("filter_values", v));
     const qs = params.toString();
     return qs ? `&${qs}` : "";
   };
@@ -433,8 +495,9 @@ const ChatWithDashboard = ({
         if (!datasetId) continue;
         try {
           const filterQs = buildFilterQuery(cfg);
+          const limit = cfg.group_by ? 2000 : 50;
           const res = await fetch(
-            `${apiBase}/api/admin/datasets/${datasetId}/records?limit=50${filterQs}`,
+            `${apiBase}/api/admin/datasets/${datasetId}/records?limit=${limit}${filterQs}`,
             {
               headers: { Authorization: `Bearer ${authToken}` },
               signal: controller.signal,
@@ -507,9 +570,9 @@ const ChatWithDashboard = ({
         const datasetId = cfg.dataset_id;
         if (!datasetId) continue;
         try {
-          const filterQs = buildFilterQuery(cfg);
+          // For full-report export, always fetch unfiltered data so users can pivot freely
           const res = await fetch(
-            `${apiBase}/api/admin/datasets/${datasetId}/records${filterQs}`,
+            `${apiBase}/api/admin/datasets/${datasetId}/records`,
             {
               headers: { Authorization: `Bearer ${authToken}` },
               signal: controller.signal,

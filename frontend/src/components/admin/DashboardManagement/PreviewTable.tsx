@@ -10,8 +10,17 @@ const normalize = (col: string) =>
   col.toLowerCase().replace(/[^a-z0-9]+/g, "_");
 const isAgeing = (col: string) => normalize(col) === "ageing_as_on_today";
 const isDateCol = (col: string) => normalize(col) === "jp_posting_date_to_hcl";
+const quarterMatch = (v: string) => {
+  const m = v.match(/^Q([1-4])(?:\s+(\d{4}))?$/i);
+  if (!m) return null;
+  const q = Number(m[1]);
+  const yr = m[2] ? Number(m[2]) : null;
+  return { q, year: yr };
+};
 const hasQuarterVal = (values: string[]) =>
-  values.some((v) => /^Q[1-4]$/.test(v));
+  values.some((v) => Boolean(quarterMatch(v)));
+const hasQuarterValWithYear = (values: string[]) =>
+  values.some((v) => Boolean(quarterMatch(v)?.year));
 const hasDayRangeVal = (values: string[]) =>
   values.some((v) => /^\d+\s*-\s*\d+$/.test(v) || /^\d+\+$/.test(v));
 
@@ -41,19 +50,21 @@ const matchesAgeRange = (num: number, label: string) => {
   return String(num) === trimmed;
 };
 
-const toQuarterLabel = (val: unknown) => {
+const toQuarterLabel = (val: unknown, withYear = false) => {
   if (val === null || val === undefined) return "(blank)";
   const parsed = new Date(String(val));
   if (Number.isNaN(parsed.getTime())) return String(val);
-  const q = Math.floor(parsed.getMonth() / 3) + 1;
-  if (q < 1 || q > 4) return String(val);
-  return `Q${q}`;
+  const q = Math.floor(parsed.getUTCMonth() / 3) + 1;
+  const year = parsed.getUTCFullYear();
+  if (q < 1 || q > 4 || !Number.isFinite(year)) return String(val);
+  return withYear ? `Q${q} ${year}` : `Q${q}`;
 };
 
 const toLabel = (col: string, selectedValues: string[], val: unknown) => {
   if (isAgeing(col)) return bucketAgeLabel(val);
   if (isDateCol(col)) {
-    const quarterLabel = toQuarterLabel(val);
+    const quarterLabel = toQuarterLabel(val, false);
+    const quarterLabelYear = toQuarterLabel(val, true);
     const dayLabel = (() => {
       if (val === null || val === undefined) return "(blank)";
       const parsed = new Date(String(val));
@@ -68,13 +79,17 @@ const toLabel = (col: string, selectedValues: string[], val: unknown) => {
     })();
     const hasDay = hasDayRangeVal(selectedValues);
     const hasQuarter = hasQuarterVal(selectedValues);
+    const hasQuarterYear = hasQuarterValWithYear(selectedValues);
     if (hasDay && hasQuarter) {
       if (selectedValues.includes(dayLabel)) return dayLabel;
+      if (hasQuarterYear && selectedValues.includes(quarterLabelYear))
+        return quarterLabelYear;
       if (selectedValues.includes(quarterLabel)) return quarterLabel;
+      if (hasQuarterYear) return quarterLabelYear;
       return dayLabel;
     }
     if (hasDay) return dayLabel;
-    if (hasQuarter) return quarterLabel;
+    if (hasQuarter) return hasQuarterYear ? quarterLabelYear : quarterLabel;
   }
   return val === null || val === undefined ? "(blank)" : String(val);
 };
@@ -87,22 +102,33 @@ const PreviewTable = ({ tableConfig, data }: PreviewTableProps) => {
 
   const matchesSelection = (col: string, values: string[], rowVal: unknown) => {
     if (!values.length) return true;
+    const norm = (v: unknown) =>
+      typeof v === "string"
+        ? v.trim().toLowerCase()
+        : String(v ?? "")
+            .trim()
+            .toLowerCase();
     if (isAgeing(col)) {
       const num = Number(rowVal);
       if (!Number.isFinite(num)) return false;
       return values.some((gv) => matchesAgeRange(num, gv));
     }
     if (isDateCol(col)) {
-      const quarterLabel = toQuarterLabel(rowVal);
+      const quarterLabel = toQuarterLabel(rowVal, false);
+      const quarterLabelYear = toQuarterLabel(rowVal, true);
       const dayLabel = toLabel(col, ["0-30"], rowVal); // uses day path
       const rawLabel =
         rowVal === null || rowVal === undefined ? "(blank)" : String(rowVal);
       return values.some(
-        (v) => v === quarterLabel || v === dayLabel || v === rawLabel
+        (v) =>
+          norm(v) === norm(quarterLabel) ||
+          norm(v) === norm(quarterLabelYear) ||
+          norm(v) === norm(dayLabel) ||
+          norm(v) === norm(rawLabel)
       );
     }
     const label = toLabel(col, values, rowVal);
-    return values.includes(label);
+    return values.some((v) => norm(v) === norm(label));
   };
 
   const rowsAfterFilter = filterBy
