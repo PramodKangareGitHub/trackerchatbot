@@ -1,5 +1,4 @@
 from sqlalchemy import Column, String, Integer, DateTime, ForeignKey
-from sqlalchemy.orm import relationship
 import uuid
 from datetime import datetime
 from app.db import Base
@@ -25,4 +24,3 @@ class Demand(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    wizard_sessions = relationship("WizardSession", back_populates="demand")

@@ -29,12 +29,6 @@ def create_app() -> FastAPI:
     app.include_router(pins_router)
     app.include_router(admin_router)
 
-    # Wizard router
-    from app.routes.wizard import router as wizard_router
-    from app.routes.wizard_steps import router as wizard_steps_router
-    app.include_router(wizard_router, prefix="/api/wizard", tags=["wizard"])
-    app.include_router(wizard_steps_router, prefix="/api/wizard", tags=["wizard-steps"])
-
     @app.on_event("startup")
     def seed_default_admin() -> None:
         """Create a default admin user if none exists yet."""

@@ -3,13 +3,11 @@ import { useEffect, useMemo, useState } from "react";
 import AdminPanel from "./components/AdminPanel";
 import ChatWithDashboard from "./components/dashboard/ChatWithDashboard";
 import ChatWindow from "./components/ChatWindow";
-import WizardRouter from "./wizard/WizardRouter";
 import {
   BrowserRouter as Router,
   Routes,
   Route,
   useNavigate,
-  Link,
 } from "react-router-dom";
 
 type AuthUser = {
@@ -502,18 +500,6 @@ const App = () => {
             isDeliveryManager={isDeliveryManager}
           />
           <main className="mt-10 flex-1 space-y-4">
-            {/* Wizard Launch Button for eligible roles */}
-            {/* {(isAdmin || isLeader || isDeliveryManager || isDeveloper) &&
-              roleView === "chat" && (
-                <div className="mb-6">
-                  <Link
-                    to="/wizard/drafts"
-                    className="inline-block rounded-lg bg-sky-600 px-5 py-2 text-white font-semibold shadow hover:bg-sky-700 transition"
-                  >
-                    + New Job Posting Wizard
-                  </Link>
-                </div>
-              )} */}
             <Routes>
               {/* Main dashboard and admin views */}
               <Route
@@ -582,8 +568,6 @@ const App = () => {
                   </>
                 }
               />
-              {/* Wizard routes */}
-              <Route path="/wizard/*" element={<WizardRouter />} />
             </Routes>
           </main>
         </div>

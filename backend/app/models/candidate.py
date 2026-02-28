@@ -37,7 +37,6 @@ class CandidateApplication(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     candidate = relationship("Candidate")
-    wizard_sessions = relationship("WizardSession", back_populates="candidate_application")
 
 class InterviewStage(Base):
     __tablename__ = "interview_stages"

@@ -1,5 +1,4 @@
 from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, UniqueConstraint
-from sqlalchemy.orm import relationship
 import uuid
 from datetime import datetime
 from app.db import Base
@@ -27,8 +26,6 @@ class JobPosting(Base):
     customer_vice_president = Column(String)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    wizard_sessions = relationship("WizardSession", back_populates="job_posting")
 
     __table_args__ = (
         UniqueConstraint("unique_job_posting_id", name="uq_job_postings_unique_id"),
