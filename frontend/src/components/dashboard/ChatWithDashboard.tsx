@@ -708,7 +708,7 @@ const ChatWithDashboard = ({
                     </div>
                   )}
                 </div>
-                {/* <div className="flex-1 flex justify-end gap-2">
+                <div className="flex-1 flex justify-end gap-2">
                   <button
                     type="button"
                     className="inline-flex items-center rounded-lg border border-sky-600 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-700 shadow-sm hover:bg-sky-100 focus:outline-none focus:ring-2 focus:ring-sky-400 dark:border-sky-400 dark:bg-slate-900 dark:text-sky-200 dark:hover:bg-slate-800"
@@ -721,7 +721,7 @@ const ChatWithDashboard = ({
                   >
                     Update Job Posting
                   </button>
-                </div> */}
+                </div>
               </div>
             )}
             {widgetLoading && (
