@@ -1,10 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 export type ReportModalProps = {
   open: boolean;
   onClose: () => void;
   columns: string[];
   rows: Record<string, unknown>[];
+  onEditRecord?: (row: Record<string, unknown>) => void;
+  onDeleteRecord?: (row: Record<string, unknown>) => void;
+  onViewRecord?: (row: Record<string, unknown>) => void;
+  onDeleted?: (uniqueJobPostingId: string) => void;
 };
 
 type ColumnType = "date" | "number" | "boolean" | "string";
@@ -106,7 +111,12 @@ const ReportModal: React.FC<ReportModalProps> = ({
   onClose,
   columns,
   rows,
+  onEditRecord,
+  onDeleteRecord,
+  onViewRecord,
+  onDeleted,
 }) => {
+  const navigate = useNavigate();
   const columnTypes = useMemo(() => {
     const types: Record<string, ColumnType> = {};
     columns.forEach((col) => {
@@ -121,6 +131,9 @@ const ReportModal: React.FC<ReportModalProps> = ({
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const [showFilterPicker, setShowFilterPicker] = useState(false);
   const [pendingFilterCol, setPendingFilterCol] = useState<string>("");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
 
   const defaultFilterFor = useCallback(
     (col: string): Filters[string] => {
@@ -230,6 +243,84 @@ const ReportModal: React.FC<ReportModalProps> = ({
       delete next[col];
       return next;
     });
+  };
+
+  const handleEdit = (row: Record<string, unknown>) => {
+    if (onEditRecord) {
+      onEditRecord(row);
+      return;
+    }
+    navigate("/job-posting", { state: { record: row } });
+  };
+
+  const handleDelete = (row: Record<string, unknown>) => {
+    if (onDeleteRecord) {
+      onDeleteRecord(row);
+      return;
+    }
+
+    const uniqueIdRaw = row.unique_job_posting_id;
+    const uniqueId =
+      typeof uniqueIdRaw === "string"
+        ? uniqueIdRaw.trim()
+        : uniqueIdRaw !== undefined && uniqueIdRaw !== null
+          ? String(uniqueIdRaw)
+          : "";
+
+    if (!uniqueId) {
+      setConfirmError(
+        "unique_job_posting_id is required to delete this record."
+      );
+      setConfirmingId(null);
+      return;
+    }
+
+    setConfirmError(null);
+    setConfirmingId(uniqueId);
+  };
+
+  const confirmDelete = async () => {
+    if (!confirmingId) return;
+    const uniqueId = confirmingId;
+    const apiBase = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+
+    setDeletingId(uniqueId);
+    setConfirmError(null);
+    try {
+      const res = await fetch(
+        `${apiBase}/api/customer-requirements/${encodeURIComponent(uniqueId)}`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(
+          body.detail || res.statusText || "Failed to delete record"
+        );
+      }
+
+      if (onDeleted) {
+        onDeleted(uniqueId);
+      }
+      setConfirmingId(null);
+      onClose();
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to delete record";
+      setConfirmError(message);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleView = (row: Record<string, unknown>) => {
+    if (onViewRecord) {
+      onViewRecord(row);
+      return;
+    }
+    navigate("/job-posting", { state: { record: row, viewOnly: true } });
   };
 
   if (!open) return null;
@@ -601,12 +692,15 @@ const ReportModal: React.FC<ReportModalProps> = ({
                       {c}
                     </th>
                   ))}
+                  <th className="whitespace-nowrap px-3 py-2 font-semibold">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {filteredRows.map((row, idx) => (
                   <tr
-                    key={idx}
+                    key={String(row.unique_job_posting_id ?? idx)}
                     className={
                       idx % 2 === 0
                         ? "bg-white dark:bg-slate-900"
@@ -623,12 +717,45 @@ const ReportModal: React.FC<ReportModalProps> = ({
                           : String(row[c])}
                       </td>
                     ))}
+                    <td className="whitespace-nowrap px-3 py-2 text-slate-800 dark:text-slate-200">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleView(row)}
+                          className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-1 focus:ring-slate-400 dark:border-slate-600 dark:text-slate-100 dark:hover:bg-slate-800"
+                        >
+                          View
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleEdit(row)}
+                          className="rounded-md border border-sky-500 px-2 py-1 text-[11px] font-semibold text-sky-700 hover:bg-sky-50 focus:outline-none focus:ring-1 focus:ring-sky-400 dark:border-sky-400 dark:text-sky-200 dark:hover:bg-slate-800"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(row)}
+                          disabled={
+                            Boolean(deletingId) &&
+                            deletingId ===
+                              String(row.unique_job_posting_id ?? "")
+                          }
+                          className="rounded-md border border-rose-500 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50 focus:outline-none focus:ring-1 focus:ring-rose-400 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-400 dark:text-rose-200 dark:hover:bg-slate-800"
+                        >
+                          {deletingId ===
+                          String(row.unique_job_posting_id ?? "")
+                            ? "Deleting..."
+                            : "Delete"}
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
                 {!filteredRows.length && (
                   <tr>
                     <td
-                      colSpan={visibleColumns.length || 1}
+                      colSpan={(visibleColumns.length || 1) + 1}
                       className="px-3 py-4 text-center text-slate-500 dark:text-slate-400"
                     >
                       No rows match the current filters.
@@ -640,6 +767,49 @@ const ReportModal: React.FC<ReportModalProps> = ({
           </div>
         </div>
       </div>
+
+      {confirmingId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-700">
+            <h5 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+              Delete job posting
+            </h5>
+            <p className="mt-2 text-sm text-slate-700 dark:text-slate-200">
+              This will remove the job posting and related HCL demand,
+              interviewed candidates, and onboarding records.
+            </p>
+            <p className="mt-2 text-sm font-semibold text-rose-700 dark:text-rose-300">
+              ID: {confirmingId}
+            </p>
+            {confirmError && (
+              <p className="mt-2 text-sm text-rose-600 dark:text-rose-400">
+                {confirmError}
+              </p>
+            )}
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (deletingId) return;
+                  setConfirmError(null);
+                  setConfirmingId(null);
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-1 focus:ring-slate-300 dark:border-slate-600 dark:text-slate-100 dark:hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                disabled={Boolean(deletingId)}
+                className="rounded-md border border-rose-500 bg-rose-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-300 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {deletingId ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

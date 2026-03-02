@@ -6,6 +6,12 @@ from app.routes.chat import router as chat_router
 from app.routes.datasets import router as datasets_router
 from app.routes.pins import router as pins_router
 from app.routes.auth import router as auth_router
+from app.routes.customer_requirements import router as customer_requirements_router
+from app.routes.hcl_demand import router as hcl_demand_router
+from app.routes.interviewed_candidate_details import (
+    router as interviewed_candidate_details_router,
+)
+from app.routes.hcl_onboarding_status import router as hcl_onboarding_router
 from app.db import SessionLocal
 from app.models.user import User
 from app.models.role import Role
@@ -28,6 +34,10 @@ def create_app() -> FastAPI:
     app.include_router(chat_router)
     app.include_router(pins_router)
     app.include_router(admin_router)
+    app.include_router(customer_requirements_router)
+    app.include_router(hcl_demand_router)
+    app.include_router(interviewed_candidate_details_router)
+    app.include_router(hcl_onboarding_router)
 
     @app.on_event("startup")
     def seed_default_admin() -> None:

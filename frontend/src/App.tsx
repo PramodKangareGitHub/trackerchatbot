@@ -3,12 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 import AdminPanel from "./components/AdminPanel";
 import ChatWithDashboard from "./components/dashboard/ChatWithDashboard";
 import ChatWindow from "./components/ChatWindow";
-import {
-  BrowserRouter as Router,
-  Routes,
-  Route,
-  useNavigate,
-} from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import CustomerRequirementPage from "./pages/CustomerRequirementPage";
+import JobPostingPage from "./pages/JobPostingPage";
 
 type AuthUser = {
   id: string;
@@ -566,6 +563,24 @@ const App = () => {
                         />
                       ))}
                   </>
+                }
+              />
+              <Route
+                path="/customer-requirement"
+                element={
+                  <CustomerRequirementPage
+                    authToken={authToken}
+                    authUserEmail={authUser?.email}
+                  />
+                }
+              />
+              <Route
+                path="/job-posting"
+                element={
+                  <JobPostingPage
+                    authToken={authToken}
+                    authUserEmail={authUser?.email}
+                  />
                 }
               />
             </Routes>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import ChatWindow from "../ChatWindow";
 import DashboardChartPreview, {
   DashboardChartConfig,
@@ -25,6 +26,7 @@ const ChatWithDashboard = ({
   showSql,
   hideChat = false,
 }: ChatSectionProps) => {
+  const navigate = useNavigate();
   const [widgetOptions, setWidgetOptions] = useState<
     {
       id: string;
@@ -554,7 +556,7 @@ const ChatWithDashboard = ({
     if (!showReportModal) return;
     const controller = new AbortController();
     const loadReport = async () => {
-      if (!authToken || !targetWidgets.length) {
+      if (!authToken) {
         setReportColumns([]);
         setReportRows([]);
         return;
@@ -562,60 +564,53 @@ const ChatWithDashboard = ({
       setReportLoading(true);
       setReportError(null);
       const apiBase = import.meta.env.VITE_API_BASE || "http://localhost:8000";
-      const colSet = new Set<string>();
-      const rowsOut: Record<string, unknown>[] = [];
-
-      for (const widget of targetWidgets) {
-        const cfg = widget.config || {};
-        const datasetId = cfg.dataset_id;
-        if (!datasetId) continue;
-        try {
-          // For full-report export, always fetch unfiltered data so users can pivot freely
-          const res = await fetch(
-            `${apiBase}/api/admin/datasets/${datasetId}/records`,
-            {
-              headers: { Authorization: `Bearer ${authToken}` },
-              signal: controller.signal,
-            }
+      try {
+        const res = await fetch(`${apiBase}/api/customer-requirements/report`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(
+            body.detail || res.statusText || "Failed to load report data"
           );
-          if (!res.ok) {
-            const body = await res.json().catch(() => ({}));
-            throw new Error(
-              body.detail || res.statusText || "Failed to load report data"
-            );
-          }
-          const data = await res.json();
-          const datasetCols: string[] = data?.columns || [];
-          const rows: Record<string, unknown>[] = data?.rows || [];
-          datasetCols.forEach((c) => colSet.add(c));
-          rows.forEach((row) => {
-            const out: Record<string, unknown> = {};
-            datasetCols.forEach((c) => {
-              out[c] = row[c] ?? "";
-            });
-            rowsOut.push(out);
-          });
-        } catch (err) {
-          if (err instanceof DOMException && err.name === "AbortError") {
-            return;
-          }
-          setReportError(err instanceof Error ? err.message : String(err));
         }
+        const data = await res.json();
+        const cols: string[] = Array.isArray(data?.columns) ? data.columns : [];
+        const rows: Record<string, unknown>[] = Array.isArray(data?.rows)
+          ? data.rows
+          : [];
+        setReportColumns(cols);
+        setReportRows(rows);
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          return;
+        }
+        setReportError(err instanceof Error ? err.message : String(err));
       }
-
-      setReportColumns(Array.from(colSet));
-      setReportRows(rowsOut);
       setReportLoading(false);
     };
 
     loadReport();
 
     return () => controller.abort();
-  }, [authToken, showReportModal, targetWidgets]);
+  }, [authToken, showReportModal]);
 
   const layoutClass = hideChat
     ? "grid gap-4"
     : "grid gap-4 lg:grid-cols-[minmax(260px,26%),1fr]";
+
+  const canOpenReport = true;
+
+  const handleEditRecord = (row: Record<string, unknown>) => {
+    navigate("/job-posting", { state: { record: row } });
+  };
+
+  const handleDeletedRecord = (uniqueId: string) => {
+    setReportRows((prev) =>
+      prev.filter((row) => String(row.unique_job_posting_id ?? "") !== uniqueId)
+    );
+  };
 
   return (
     <div className="space-y-3">
@@ -665,65 +660,73 @@ const ChatWithDashboard = ({
               )}
             </div>
 
-            {widgetOptions.length > 0 && (
-              <div className="flex items-center justify-between gap-4">
-                <div className="relative w-[260px] max-w-full">
-                  <button
-                    type="button"
-                    onClick={() => setWidgetPickerOpen((o) => !o)}
-                    className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm hover:border-slate-400 focus:border-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-50"
-                  >
-                    <span>
-                      {selectedDashboardId
+            <div className="flex items-center justify-between gap-4">
+              <div className="relative w-[260px] max-w-full">
+                <button
+                  type="button"
+                  disabled={!widgetOptions.length}
+                  onClick={() => setWidgetPickerOpen((o) => !o)}
+                  className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-sm font-semibold shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-300 dark:bg-slate-900 dark:text-slate-50 ${
+                    widgetOptions.length
+                      ? "border-slate-300 bg-white text-slate-900 hover:border-slate-400 focus:border-sky-600 dark:border-slate-700"
+                      : "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400 dark:border-slate-800 dark:bg-slate-800 dark:text-slate-500"
+                  }`}
+                >
+                  <span>
+                    {widgetOptions.length
+                      ? selectedDashboardId
                         ? widgetSummary
-                        : "Select a dashboard"}
-                    </span>
-                    <span aria-hidden className="text-slate-400">
-                      ▾
-                    </span>
-                  </button>
-                  {widgetPickerOpen && (
-                    <div className="absolute z-30 mt-2 w-[260px] rounded-lg border border-slate-300 bg-white p-2 shadow-xl dark:border-slate-700 dark:bg-slate-900">
-                      <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-slate-900 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-800">
+                        : "Select a dashboard"
+                      : "No widgets available"}
+                  </span>
+                  <span aria-hidden className="text-slate-400">
+                    ▾
+                  </span>
+                </button>
+                {widgetPickerOpen && widgetOptions.length > 0 && (
+                  <div className="absolute z-30 mt-2 w-[260px] rounded-lg border border-slate-300 bg-white p-2 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+                    <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-slate-900 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-800">
+                      <input
+                        type="checkbox"
+                        checked={selectedWidgetIds.includes("all")}
+                        onChange={() => handleWidgetToggle("all")}
+                      />
+                      All
+                    </label>
+                    {widgetOptions.map((w) => (
+                      <label
+                        key={w.id}
+                        className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-slate-800 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-800"
+                      >
                         <input
                           type="checkbox"
-                          checked={selectedWidgetIds.includes("all")}
-                          onChange={() => handleWidgetToggle("all")}
+                          checked={selectedWidgetIds.includes(w.id)}
+                          onChange={() => handleWidgetToggle(w.id)}
                         />
-                        All
+                        {w.title}
                       </label>
-                      {widgetOptions.map((w) => (
-                        <label
-                          key={w.id}
-                          className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-sm font-semibold text-slate-800 hover:bg-slate-50 dark:text-slate-100 dark:hover:bg-slate-800"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selectedWidgetIds.includes(w.id)}
-                            onChange={() => handleWidgetToggle(w.id)}
-                          />
-                          {w.title}
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div className="flex-1 flex justify-end gap-2">
-                  <button
-                    type="button"
-                    className="inline-flex items-center rounded-lg border border-sky-600 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-700 shadow-sm hover:bg-sky-100 focus:outline-none focus:ring-2 focus:ring-sky-400 dark:border-sky-400 dark:bg-slate-900 dark:text-sky-200 dark:hover:bg-slate-800"
-                  >
-                    Received new Job Posting?
-                  </button>
-                  <button
-                    type="button"
-                    className="inline-flex items-center rounded-lg border border-emerald-600 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-400 dark:border-emerald-400 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-slate-800"
-                  >
-                    Update Job Posting
-                  </button>
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+              <div className="flex-1 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => navigate("/customer-requirement")}
+                  className="inline-flex items-center rounded-lg border border-sky-600 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-700 shadow-sm hover:bg-sky-100 focus:outline-none focus:ring-2 focus:ring-sky-400 dark:border-sky-400 dark:bg-slate-900 dark:text-sky-200 dark:hover:bg-slate-800"
+                >
+                  Received new Job Posting?
+                </button>
+                <button
+                  type="button"
+                  onClick={() => canOpenReport && setShowReportModal(true)}
+                  disabled={!canOpenReport}
+                  className="inline-flex items-center rounded-lg border border-emerald-600 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-400 dark:border-emerald-400 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-slate-800"
+                >
+                  Update Job Posting
+                </button>
+              </div>
+            </div>
             {widgetLoading && (
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Loading widgets…
@@ -836,28 +839,27 @@ const ChatWithDashboard = ({
                 );
               })}
             </div>
-            {!!previewItems.length && (
-              <div className="pt-2 text-center">
-                <button
-                  type="button"
-                  onClick={() => setShowReportModal(true)}
-                  className="inline-flex items-center gap-1 text-sm font-semibold text-sky-600 underline-offset-4 hover:text-sky-700 hover:underline dark:text-sky-300 dark:hover:text-sky-200"
-                >
-                  <span aria-hidden>+</span>
-                  More Details
-                </button>
-                {reportLoading && (
-                  <p className="pt-1 text-[11px] text-slate-500 dark:text-slate-400">
-                    Loading full data…
-                  </p>
-                )}
-                {reportError && (
-                  <p className="pt-1 text-[11px] text-rose-600 dark:text-rose-400">
-                    {reportError}
-                  </p>
-                )}
-              </div>
-            )}
+            <div className="pt-2 text-center">
+              <button
+                type="button"
+                onClick={() => canOpenReport && setShowReportModal(true)}
+                disabled={!canOpenReport}
+                className="inline-flex items-center gap-1 text-sm font-semibold underline-offset-4 disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline text-sky-600 hover:text-sky-700 hover:underline dark:text-sky-300 dark:hover:text-sky-200"
+              >
+                <span aria-hidden>+</span>
+                More Details
+              </button>
+              {reportLoading && (
+                <p className="pt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                  Loading full data…
+                </p>
+              )}
+              {reportError && (
+                <p className="pt-1 text-[11px] text-rose-600 dark:text-rose-400">
+                  {reportError}
+                </p>
+              )}
+            </div>
           </div>
         </section>
 
@@ -873,6 +875,8 @@ const ChatWithDashboard = ({
         onClose={() => setShowReportModal(false)}
         columns={reportColumns}
         rows={reportRows}
+        onEditRecord={handleEditRecord}
+        onDeleted={handleDeletedRecord}
       />
     </div>
   );

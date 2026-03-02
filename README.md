@@ -13,7 +13,6 @@ Prerequisites
 Setup
 
 1. Backend
-
    - cd backend
    - python -m venv .venv && source .venv/Scripts/activate (PowerShell: .venv\Scripts\Activate)
    - pip install -r requirements.txt
@@ -32,7 +31,7 @@ API notes
 
 Environment
 
-- DATABASE_URL (optional; defaults to sqlite:///backend/data.db absolute path)
+- DATABASE_URL (optional; defaults to sqlite:///./app.db inside backend/)
 - INTENT_MODEL, INTENT_MODEL_TEMPERATURE for LangChain model selection
 - USE_AI_CAFE=true to route intent generation to AI Cafe
 - AI_CAFE_ENDPOINT, AI_CAFE_API_KEY required when USE_AI_CAFE is true (optional: AI_CAFE_MODEL, AI_CAFE_MAX_TOKENS)
@@ -41,8 +40,10 @@ Development tips
 
 - Keep backend and frontend running separately.
 - Theme and admin/viewer mode toggles live in the UI header.
-- Alembic quick commands (from backend/):
-  - alembic stamp head
-  - alembic stamp base
-  - alembic revision --autogenerate -m "Initial migration"
-  - alembic upgrade head
+
+Database reset & migrations (from backend/)
+
+- Activate venv: `.venv\Scripts\Activate.ps1` (PowerShell) or `source .venv/bin/activate` (bash)
+- Optional fresh start: `Remove-Item app.db -Force` (PowerShell) or `rm app.db` (bash)
+- Apply schema: `.venv\Scripts\python -m alembic upgrade head` (or `alembic upgrade head` if alembic is on PATH)
+- If models change later: `alembic revision -m "describe change"` then edit the generated file (autogenerate is not wired) and run `alembic upgrade head`
