@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -42,8 +44,8 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def seed_default_admin() -> None:
         """Create a default admin user if none exists yet."""
-        email = "admin@gmail.com"
-        password = "admin@tracker123"
+        email = os.getenv("DEFAULT_ADMIN_EMAIL")
+        password = os.getenv("DEFAULT_ADMIN_PASSWORD")
         with SessionLocal() as db:
             existing = db.query(User).filter(User.email == email).first()
             if existing:
