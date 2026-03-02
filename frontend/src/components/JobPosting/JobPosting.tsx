@@ -187,7 +187,6 @@ const JobPosting: React.FC<JobPostingProps> = ({
   useEffect(() => {
     const uniqueId = initialRequirement?.unique_job_posting_id;
     if (!uniqueId) return;
-    if (!hclDemand.demand_id.trim()) return;
 
     const apiBase = import.meta.env.VITE_API_BASE || "http://localhost:8000";
     const headers: Record<string, string> = {
