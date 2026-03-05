@@ -35,14 +35,20 @@ const AccordionItem: React.FC<{
         aria-expanded={isOpen}
       >
         <span>{title}</span>
-        <span
+        <svg
           aria-hidden
-          className={`ml-3 inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 text-base text-slate-600 transition-transform ${
-            isOpen ? "rotate-45" : ""
+          className={`ml-3 h-5 w-5 text-slate-600 transition-transform ${
+            isOpen ? "rotate-180" : ""
           }`}
+          viewBox="0 0 20 20"
+          fill="currentColor"
         >
-          +
-        </span>
+          <path
+            fillRule="evenodd"
+            d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.25a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z"
+            clipRule="evenodd"
+          />
+        </svg>
       </button>
       <div
         className={`overflow-hidden border-t border-slate-200 transition-[max-height] duration-300 ${
@@ -125,7 +131,7 @@ const defaultOnboarding: HclOnboardingFormState = {
   candidate_contact: "",
   candidate_email: "",
   hcl_onboarding_status: "",
-  hire_loss_reason: "",
+  hire_loss_reason: "NA",
   onboarded_date: "",
   employee_name: "",
   employee_hcl_email: "",
@@ -153,12 +159,16 @@ const JobPosting: React.FC<JobPostingProps> = ({
   viewOnly = false,
 }) => {
   const isEditMode = Boolean(initialRequirement?.unique_job_posting_id);
+  const [showHclOnboarding, setShowHclOnboarding] = useState(() => viewOnly);
+  const [showOptumOnboarding, setShowOptumOnboarding] = useState(
+    () => viewOnly
+  );
   const [openSections, setOpenSections] = useState(() => ({
     customer: isEditMode ? false : true,
     hcl: true,
     candidates: true,
-    onboarding: true,
-    optumOnboarding: true,
+    onboarding: false,
+    optumOnboarding: false,
   }));
   const formId = "customer-requirement-form";
   const [updating, setUpdating] = useState(false);
@@ -170,7 +180,7 @@ const JobPosting: React.FC<JobPostingProps> = ({
     })
   );
   const [candidates, setCandidates] = useState<InterviewedCandidateFormState[]>(
-    [{ ...defaultCandidate }]
+    []
   );
   const [initialCandidates, setInitialCandidates] = useState<
     InterviewedCandidateFormState[]
@@ -311,13 +321,8 @@ const JobPosting: React.FC<JobPostingProps> = ({
               ),
             }))
           : [];
-        if (mapped.length === 0) {
-          setCandidates([{ ...defaultCandidate }]);
-          setInitialCandidates([]);
-        } else {
-          setCandidates(mapped);
-          setInitialCandidates(mapped);
-        }
+        setCandidates(mapped);
+        setInitialCandidates(mapped);
       } catch (err) {
         console.error("Failed to load interviewed candidates", err);
       }
@@ -329,6 +334,12 @@ const JobPosting: React.FC<JobPostingProps> = ({
     hclDemand.demand_id,
     initialRequirement?.unique_job_posting_id,
   ]);
+
+  useEffect(() => {
+    if (showHclOnboarding) {
+      setOpenSections((prev) => ({ ...prev, onboarding: true }));
+    }
+  }, [showHclOnboarding]);
 
   useEffect(() => {
     const uniqueId = initialRequirement?.unique_job_posting_id;
@@ -432,13 +443,16 @@ const JobPosting: React.FC<JobPostingProps> = ({
           candidate_contact: data?.candidate_contact || "",
           candidate_email: data?.candidate_email || "",
           hcl_onboarding_status: data?.hcl_onboarding_status || "",
-          hire_loss_reason: data?.hire_loss_reason || "",
+          hire_loss_reason: data?.hire_loss_reason || "NA",
           onboarded_date: toDateInput(data?.onboarded_date),
           employee_name: data?.employee_name || "",
           employee_hcl_email: data?.employee_hcl_email || "",
         };
         setOnboarding(next);
         setInitialOnboarding(next);
+        if (next.candidate_contact || next.candidate_email) {
+          setShowHclOnboarding(true);
+        }
       } catch (err) {
         console.error("Failed to load onboarding status", err);
       }
@@ -453,6 +467,20 @@ const JobPosting: React.FC<JobPostingProps> = ({
 
   const handleHclChange = (patch: Partial<HclDemandFormState>) => {
     setHclDemand((prev) => ({ ...prev, ...patch }));
+  };
+
+  const handleCandidateOnboard = (candidate: InterviewedCandidateFormState) => {
+    setOnboarding((prev) => ({
+      ...prev,
+      candidate_contact: candidate.candidate_contact || prev.candidate_contact,
+      candidate_email: candidate.candidate_email || prev.candidate_email,
+      hcl_onboarding_status:
+        prev.hcl_onboarding_status && prev.hcl_onboarding_status !== ""
+          ? prev.hcl_onboarding_status
+          : "Selected",
+    }));
+    setShowHclOnboarding(true);
+    setOpenSections((prev) => ({ ...prev, onboarding: true }));
   };
 
   const hasHclChanges = (current: HclDemandFormState) => {
@@ -502,7 +530,7 @@ const JobPosting: React.FC<JobPostingProps> = ({
       candidate_contact: o.candidate_contact.trim(),
       candidate_email: o.candidate_email.trim(),
       hcl_onboarding_status: o.hcl_onboarding_status.trim(),
-      hire_loss_reason: o.hire_loss_reason.trim(),
+      hire_loss_reason: o.hire_loss_reason.trim() || "NA",
       onboarded_date: o.onboarded_date || "",
       employee_name: o.employee_name.trim(),
       employee_hcl_email: o.employee_hcl_email.trim(),
@@ -703,12 +731,6 @@ const JobPosting: React.FC<JobPostingProps> = ({
             })),
         };
 
-        if (candidatePayload.records.length === 0) {
-          throw new Error(
-            "At least one interviewed candidate contact is required."
-          );
-        }
-
         const candRes = await fetch(
           `${apiBase}/api/interviewed-candidates/bulk`,
           {
@@ -735,6 +757,11 @@ const JobPosting: React.FC<JobPostingProps> = ({
           ...onboarding,
           unique_job_posting_id: uniqueId,
           demand_id: hclDemand.demand_id.trim(),
+          onboarded_date:
+            onboarding.hcl_onboarding_status === "Onboarded" &&
+            onboarding.onboarded_date
+              ? onboarding.onboarded_date
+              : null,
         };
 
         const onboardingRes = await fetch(
@@ -805,6 +832,39 @@ const JobPosting: React.FC<JobPostingProps> = ({
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={() =>
+            setOpenSections({
+              customer: true,
+              hcl: true,
+              candidates: true,
+              onboarding: true,
+              optumOnboarding: true,
+            })
+          }
+          className="rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-1 focus:ring-slate-300"
+        >
+          Expand All
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            setOpenSections({
+              customer: false,
+              hcl: false,
+              candidates: false,
+              onboarding: false,
+              optumOnboarding: false,
+            })
+          }
+          className="rounded-md border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-1 focus:ring-slate-300"
+        >
+          Collapse All
+        </button>
+      </div>
+
       <AccordionItem
         title="Customer Requirement"
         isOpen={openSections.customer}
@@ -1108,12 +1168,13 @@ const JobPosting: React.FC<JobPostingProps> = ({
             <InterviewedCandidateDetail
               value={candidates}
               onChange={setCandidates}
+              onOnboard={handleCandidateOnboard}
             />
           )}
         </AccordionItem>
       )}
 
-      {isEditMode && (
+      {isEditMode && (viewOnly || showHclOnboarding) && (
         <AccordionItem
           title="HCL Onboarding Status"
           isOpen={openSections.onboarding}
@@ -1163,7 +1224,7 @@ const JobPosting: React.FC<JobPostingProps> = ({
         </AccordionItem>
       )}
 
-      {isEditMode && (
+      {isEditMode && (viewOnly || showOptumOnboarding) && (
         <AccordionItem
           title="Optum Onboarding Status"
           isOpen={openSections.optumOnboarding}

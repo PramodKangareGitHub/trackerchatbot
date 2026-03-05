@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 export type InterviewedCandidateFormState = {
   candidate_contact: string;
@@ -23,14 +23,36 @@ export type InterviewedCandidateFormState = {
 export type InterviewedCandidateDetailProps = {
   value: InterviewedCandidateFormState[];
   onChange: (next: InterviewedCandidateFormState[]) => void;
+  onOnboard?: (candidate: InterviewedCandidateFormState) => void;
 };
 
 const inputClasses =
   "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500";
 
+const initialScreeningStatuses = [
+  { value: "", label: "---Select Status---" },
+  { value: "InProgress", label: "InProgress" },
+  { value: "Selected", label: "Selected" },
+  { value: "Rejected", label: "Rejected" },
+];
+
+const interviewStatuses = [
+  { value: "", label: "---Select Status---" },
+  { value: "To be scheduled", label: "To be scheduled" },
+  { value: "Scheduled", label: "Scheduled" },
+  { value: "Selected", label: "Selected" },
+  { value: "Rejected", label: "Rejected" },
+];
+
+const interviewStatusesWithSkipped = [
+  ...interviewStatuses,
+  { value: "Skipped", label: "Skipped" },
+];
+
 const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
   value,
   onChange,
+  onOnboard,
 }) => {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
@@ -63,6 +85,175 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
   const activeCandidate =
     activeIndex === null ? null : (value[activeIndex] ?? null);
 
+  const stageState = useMemo(() => {
+    const val = (field: keyof InterviewedCandidateFormState): string =>
+      (activeCandidate && activeCandidate[field]) || "";
+    const isSelected = (status: string) =>
+      status !== "" && status !== "---Select Status---";
+    const isRejected = (status: string) => status === "Rejected";
+    const canAdvance = (status: string) =>
+      status === "Selected" || status === "Skipped";
+
+    const initialStatus = val("initial_screening_status");
+    const tp1Status = val("tp1_interview_status");
+    const tp2Status = val("tp2_interview_status");
+    const managerStatus = val("manager_interview_status");
+
+    const tp1Enabled = canAdvance(initialStatus);
+    const tp1Advanceable = canAdvance(tp1Status);
+
+    const tp2Enabled = tp1Advanceable;
+    const tp2Advanceable = canAdvance(tp2Status);
+
+    const managerEnabled = tp2Advanceable;
+    const managerAdvanceable = canAdvance(managerStatus);
+
+    const customerEnabled = managerAdvanceable;
+
+    return {
+      tp1Enabled,
+      tp2Enabled,
+      managerEnabled,
+      customerEnabled,
+    };
+  }, [activeCandidate]);
+
+  useEffect(() => {
+    if (!activeCandidate || activeIndex === null) return;
+
+    const val = (field: keyof InterviewedCandidateFormState): string =>
+      (activeCandidate && activeCandidate[field]) || "";
+    const canAdvance = (status: string) =>
+      status === "Selected" || status === "Skipped";
+
+    const initialStatus = val("initial_screening_status");
+    const tp1Status = val("tp1_interview_status");
+    const tp2Status = val("tp2_interview_status");
+    const managerStatus = val("manager_interview_status");
+
+    const tp1Allowed = canAdvance(initialStatus);
+    const tp2Allowed = tp1Allowed && canAdvance(tp1Status);
+    const managerAllowed = tp2Allowed && canAdvance(tp2Status);
+    const customerAllowed = managerAllowed && canAdvance(managerStatus);
+
+    const updates: Partial<InterviewedCandidateFormState> = {};
+
+    if (!tp1Allowed) {
+      if (activeCandidate.tp1_interview_status)
+        updates.tp1_interview_status = "";
+      if (activeCandidate.tp1_rejected_reason) updates.tp1_rejected_reason = "";
+    }
+
+    if (!tp2Allowed) {
+      if (activeCandidate.tp2_interview_status)
+        updates.tp2_interview_status = "";
+      if (activeCandidate.tp2_skipped_rejected_reason)
+        updates.tp2_skipped_rejected_reason = "";
+    }
+
+    if (!managerAllowed) {
+      if (activeCandidate.manager_interview_status)
+        updates.manager_interview_status = "";
+      if (activeCandidate.manager_skipped_rejected_reason)
+        updates.manager_skipped_rejected_reason = "";
+    }
+
+    if (!customerAllowed) {
+      if (activeCandidate.customer_interview_status)
+        updates.customer_interview_status = "";
+      if (activeCandidate.customer_interview_skipped_rejected_reason)
+        updates.customer_interview_skipped_rejected_reason = "";
+    }
+
+    if (Object.keys(updates).length) {
+      setField(activeIndex, updates);
+    }
+  }, [activeCandidate, activeIndex]);
+
+  const reasonState = useMemo(() => {
+    const val = (field: keyof InterviewedCandidateFormState): string =>
+      (activeCandidate && activeCandidate[field]) || "";
+    const shouldEnable = (status: string) =>
+      status === "Skipped" || status === "Rejected";
+
+    const initialStatus = val("initial_screening_status");
+    const tp1Status = val("tp1_interview_status");
+    const tp2Status = val("tp2_interview_status");
+    const managerStatus = val("manager_interview_status");
+    const customerStatus = val("customer_interview_status");
+
+    return {
+      initialReasonEnabled: shouldEnable(initialStatus),
+      tp1ReasonEnabled: shouldEnable(tp1Status),
+      tp2ReasonEnabled: shouldEnable(tp2Status),
+      managerReasonEnabled: shouldEnable(managerStatus),
+      customerReasonEnabled: shouldEnable(customerStatus),
+    };
+  }, [activeCandidate]);
+
+  const derivedInterviewStatus = useMemo(() => {
+    if (!activeCandidate) return "";
+    const priority: Array<{
+      field:
+        | "customer_interview_status"
+        | "manager_interview_status"
+        | "tp2_interview_status"
+        | "tp1_interview_status"
+        | "initial_screening_status";
+      label: string;
+    }> = [
+      {
+        field: "customer_interview_status",
+        label: "Customer Interview Status",
+      },
+      { field: "manager_interview_status", label: "Manager Interview Status" },
+      { field: "tp2_interview_status", label: "TP2 Interview Status" },
+      { field: "tp1_interview_status", label: "TP1 Interview Status" },
+      { field: "initial_screening_status", label: "Initial Screening Status" },
+    ];
+
+    for (const item of priority) {
+      const status = activeCandidate[item.field];
+      if (status && status !== "---Select Status---" && status !== "Skipped") {
+        return `${item.label} - ${status}`;
+      }
+    }
+    return "";
+  }, [activeCandidate]);
+
+  useEffect(() => {
+    if (
+      activeCandidate &&
+      activeIndex !== null &&
+      activeCandidate.interview_status !== derivedInterviewStatus
+    ) {
+      setField(activeIndex, { interview_status: derivedInterviewStatus });
+    }
+  }, [activeCandidate, activeIndex, derivedInterviewStatus]);
+
+  const onboardEnabled = useMemo(() => {
+    if (!activeCandidate) return false;
+    if (!activeCandidate.candidate_contact.trim()) return false;
+    const initialStatus = activeCandidate.initial_screening_status;
+    const tp1Status = activeCandidate.tp1_interview_status;
+    const tp2Status = activeCandidate.tp2_interview_status;
+    const managerStatus = activeCandidate.manager_interview_status;
+    const customerStatus = activeCandidate.customer_interview_status;
+
+    const isAllowed = (status: string) =>
+      status === "" || status === "Selected" || status === "Skipped";
+
+    if (!isAllowed(initialStatus)) return false;
+    if (!isAllowed(tp1Status)) return false;
+    if (!isAllowed(tp2Status)) return false;
+    if (!isAllowed(managerStatus)) return false;
+    if (!isAllowed(customerStatus)) return false;
+
+    if (tp1Status !== "Selected") return false;
+
+    return true;
+  }, [activeCandidate]);
+
   const setField = (
     idx: number,
     patch: Partial<InterviewedCandidateFormState>
@@ -81,7 +272,11 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
 
   const removeCandidate = (idx: number) => {
     const next = value.filter((_, i) => i !== idx);
-    onChange(next.length ? next : [createBlank()]);
+    onChange(next);
+    if (next.length === 0) {
+      setActiveIndex(null);
+      return;
+    }
     if (activeIndex === idx) {
       setActiveIndex(null);
     } else if (activeIndex !== null && activeIndex > idx) {
@@ -167,13 +362,31 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                   {activeCandidate.candidate_contact || "New candidate"}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={closeSheet}
-                className="rounded border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-              >
-                Close
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={!onboardEnabled}
+                  className={`rounded px-3 py-1.5 text-xs font-semibold text-white shadow ${
+                    onboardEnabled
+                      ? "bg-emerald-600 hover:bg-emerald-700"
+                      : "bg-emerald-400 cursor-not-allowed opacity-80"
+                  }`}
+                  onClick={() => {
+                    if (!onboardEnabled || !activeCandidate) return;
+                    onOnboard?.(activeCandidate);
+                    closeSheet();
+                  }}
+                >
+                  Select for Onboarding
+                </button>
+                <button
+                  type="button"
+                  onClick={closeSheet}
+                  className="rounded border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                >
+                  Close
+                </button>
+              </div>
             </div>
 
             <div className="space-y-3 p-5">
@@ -246,34 +459,6 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-slate-700">
-                    Interview Status
-                  </span>
-                  <input
-                    className={inputClasses}
-                    value={activeCandidate.interview_status}
-                    onChange={(e) =>
-                      setField(activeIndex, {
-                        interview_status: e.target.value,
-                      })
-                    }
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-sm">
-                  <span className="font-medium text-slate-700">
-                    Initial Screening Status
-                  </span>
-                  <input
-                    className={inputClasses}
-                    value={activeCandidate.initial_screening_status}
-                    onChange={(e) =>
-                      setField(activeIndex, {
-                        initial_screening_status: e.target.value,
-                      })
-                    }
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-sm">
-                  <span className="font-medium text-slate-700">
                     Candidate Selected Date
                   </span>
                   <input
@@ -289,7 +474,42 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                 </label>
               </div>
 
+              <label className="flex flex-col gap-1 text-sm">
+                <span className="font-medium text-slate-700">
+                  Interview Status
+                </span>
+                <input
+                  className={inputClasses}
+                  value={derivedInterviewStatus}
+                  disabled
+                  readOnly
+                />
+              </label>
+
               <div className="grid gap-3 md:grid-cols-2">
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="font-medium text-slate-700">
+                    Initial Screening Status
+                  </span>
+                  <select
+                    className={inputClasses}
+                    value={activeCandidate.initial_screening_status}
+                    onChange={(e) =>
+                      setField(activeIndex, {
+                        initial_screening_status: e.target.value,
+                      })
+                    }
+                  >
+                    {initialScreeningStatuses.map((opt) => (
+                      <option
+                        key={opt.value || "placeholder"}
+                        value={opt.value}
+                      >
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-slate-700">
                     Initial Screening Rejected Reason
@@ -302,13 +522,17 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                         initial_screening_rejected_reason: e.target.value,
                       })
                     }
+                    disabled={!reasonState.initialReasonEnabled}
                   />
                 </label>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-slate-700">
                     TP1 Interview Status
                   </span>
-                  <input
+                  <select
                     className={inputClasses}
                     value={activeCandidate.tp1_interview_status}
                     onChange={(e) =>
@@ -316,7 +540,17 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                         tp1_interview_status: e.target.value,
                       })
                     }
-                  />
+                    disabled={!stageState.tp1Enabled}
+                  >
+                    {interviewStatuses.map((opt) => (
+                      <option
+                        key={opt.value || "placeholder"}
+                        value={opt.value}
+                      >
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-slate-700">
@@ -330,13 +564,17 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                         tp1_rejected_reason: e.target.value,
                       })
                     }
+                    disabled={!reasonState.tp1ReasonEnabled}
                   />
                 </label>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-slate-700">
                     TP2 Interview Status
                   </span>
-                  <input
+                  <select
                     className={inputClasses}
                     value={activeCandidate.tp2_interview_status}
                     onChange={(e) =>
@@ -344,7 +582,17 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                         tp2_interview_status: e.target.value,
                       })
                     }
-                  />
+                    disabled={!stageState.tp2Enabled}
+                  >
+                    {interviewStatusesWithSkipped.map((opt) => (
+                      <option
+                        key={opt.value || "placeholder"}
+                        value={opt.value}
+                      >
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-slate-700">
@@ -358,6 +606,7 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                         tp2_skipped_rejected_reason: e.target.value,
                       })
                     }
+                    disabled={!reasonState.tp2ReasonEnabled}
                   />
                 </label>
               </div>
@@ -367,7 +616,7 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                   <span className="font-medium text-slate-700">
                     Manager Interview Status
                   </span>
-                  <input
+                  <select
                     className={inputClasses}
                     value={activeCandidate.manager_interview_status}
                     onChange={(e) =>
@@ -375,7 +624,17 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                         manager_interview_status: e.target.value,
                       })
                     }
-                  />
+                    disabled={!stageState.managerEnabled}
+                  >
+                    {interviewStatusesWithSkipped.map((opt) => (
+                      <option
+                        key={opt.value || "placeholder"}
+                        value={opt.value}
+                      >
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-slate-700">
@@ -389,13 +648,17 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                         manager_skipped_rejected_reason: e.target.value,
                       })
                     }
+                    disabled={!reasonState.managerReasonEnabled}
                   />
                 </label>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-slate-700">
                     Customer Interview Status
                   </span>
-                  <input
+                  <select
                     className={inputClasses}
                     value={activeCandidate.customer_interview_status}
                     onChange={(e) =>
@@ -403,7 +666,17 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                         customer_interview_status: e.target.value,
                       })
                     }
-                  />
+                    disabled={!stageState.customerEnabled}
+                  >
+                    {interviewStatusesWithSkipped.map((opt) => (
+                      <option
+                        key={opt.value || "placeholder"}
+                        value={opt.value}
+                      >
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-slate-700">
@@ -420,6 +693,7 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                           e.target.value,
                       })
                     }
+                    disabled={!reasonState.customerReasonEnabled}
                   />
                 </label>
               </div>

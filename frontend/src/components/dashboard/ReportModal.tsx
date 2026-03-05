@@ -39,7 +39,6 @@ const detectColumnType = (values: unknown[]): ColumnType => {
   ) {
     return "boolean";
   }
-
   const date = new Date(strVal);
   if (!Number.isNaN(date.getTime()) && /\d{4}-\d{2}-\d{2}/.test(strVal)) {
     return "date";
@@ -117,6 +116,13 @@ const ReportModal: React.FC<ReportModalProps> = ({
   onDeleted,
 }) => {
   const navigate = useNavigate();
+  const formatColumnLabel = useCallback((col: string) => {
+    return col
+      .split("_")
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
+  }, []);
   const columnTypes = useMemo(() => {
     const types: Record<string, ColumnType> = {};
     columns.forEach((col) => {
@@ -327,7 +333,7 @@ const ReportModal: React.FC<ReportModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-3 py-6">
-      <div className="flex w-[80%] max-w-6xl max-h-[90vh] flex-col rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-700">
+      <div className="flex w-[90%] max-w-[1600px] max-h-[90vh] flex-col rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-700">
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3 dark:border-slate-700">
           <h4 className="text-lg font-semibold text-slate-900 dark:text-slate-50">
             Generate Report
@@ -379,7 +385,7 @@ const ReportModal: React.FC<ReportModalProps> = ({
                 >
                   {availableFilterColumns.map((col) => (
                     <option key={col} value={col}>
-                      {col}
+                      {formatColumnLabel(col)}
                     </option>
                   ))}
                 </select>
@@ -406,7 +412,7 @@ const ReportModal: React.FC<ReportModalProps> = ({
                   return (
                     <div key={col} className="space-y-1">
                       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
-                        {col}
+                        {formatColumnLabel(col)}
                       </div>
                       <div className="flex items-center gap-2">
                         <input
@@ -441,7 +447,7 @@ const ReportModal: React.FC<ReportModalProps> = ({
                   return (
                     <div key={col} className="space-y-1">
                       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
-                        {col}
+                        {formatColumnLabel(col)}
                       </div>
                       <div className="flex items-center gap-2">
                         <input
@@ -509,7 +515,7 @@ const ReportModal: React.FC<ReportModalProps> = ({
                   return (
                     <div key={col} className="space-y-1">
                       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
-                        {col}
+                        {formatColumnLabel(col)}
                       </div>
                       <div className="flex items-center gap-3 text-[11px]">
                         <label className="flex items-center gap-1">
@@ -555,7 +561,7 @@ const ReportModal: React.FC<ReportModalProps> = ({
                   return (
                     <div key={col} className="space-y-1">
                       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
-                        {col}
+                        {formatColumnLabel(col)}
                       </div>
                       <input
                         type="text"
@@ -671,7 +677,7 @@ const ReportModal: React.FC<ReportModalProps> = ({
                         checked={visibleColumns.includes(col)}
                         onChange={() => toggleColumn(col)}
                       />
-                      {col}
+                      {formatColumnLabel(col)}
                     </label>
                   ))}
                 </div>
@@ -689,7 +695,7 @@ const ReportModal: React.FC<ReportModalProps> = ({
                       key={c}
                       className="whitespace-nowrap px-3 py-2 font-semibold"
                     >
-                      {c}
+                      {formatColumnLabel(c)}
                     </th>
                   ))}
                   <th className="whitespace-nowrap px-3 py-2 font-semibold">

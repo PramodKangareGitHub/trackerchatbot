@@ -14,6 +14,7 @@ from app.routes.interviewed_candidate_details import (
     router as interviewed_candidate_details_router,
 )
 from app.routes.hcl_onboarding_status import router as hcl_onboarding_router
+from app.routes.optum_onboarding_status import router as optum_onboarding_router
 from app.db import SessionLocal
 from app.models.user import User
 from app.models.role import Role
@@ -40,6 +41,7 @@ def create_app() -> FastAPI:
     app.include_router(hcl_demand_router)
     app.include_router(interviewed_candidate_details_router)
     app.include_router(hcl_onboarding_router)
+    app.include_router(optum_onboarding_router)
 
     @app.on_event("startup")
     def seed_default_admin() -> None:

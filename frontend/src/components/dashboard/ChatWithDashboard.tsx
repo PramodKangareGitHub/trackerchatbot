@@ -6,6 +6,7 @@ import DashboardChartPreview, {
 } from "./DashboardChartPreview";
 import Banner from "./Banner";
 import ReportModal from "./ReportModal";
+import OpenDemandModal, { HclOnboardingRow } from "./OpenDemandModal";
 
 type Dashboard = {
   id: string;
@@ -63,6 +64,18 @@ const ChatWithDashboard = ({
   const [selectedDashboardId, setSelectedDashboardId] = useState<string | null>(
     null
   );
+  const [openDemandsOpen, setOpenDemandsOpen] = useState(false);
+  const [openDemandsRows, setOpenDemandsRows] = useState<HclOnboardingRow[]>(
+    []
+  );
+  const [openDemandsLoading, setOpenDemandsLoading] = useState(false);
+  const [openDemandsError, setOpenDemandsError] = useState<string | null>(null);
+  const [openDemandsEditing, setOpenDemandsEditing] = useState<string | null>(
+    null
+  );
+  const [openDemandsDraft, setOpenDemandsDraft] =
+    useState<HclOnboardingRow | null>(null);
+  const [openDemandsSaving, setOpenDemandsSaving] = useState(false);
 
   useEffect(() => {
     const loadDashboards = async () => {
@@ -117,6 +130,64 @@ const ChatWithDashboard = ({
     }
     setSelectedDashboardId(dashboards[0].id);
   }, [dashboards, selectedDashboardId]);
+
+  useEffect(() => {
+    if (!openDemandsOpen) return;
+    const controller = new AbortController();
+    const load = async () => {
+      if (!authToken) {
+        setOpenDemandsRows([]);
+        setOpenDemandsError("You must be signed in to load demands.");
+        return;
+      }
+      setOpenDemandsLoading(true);
+      setOpenDemandsError(null);
+      try {
+        const apiBase =
+          import.meta.env.VITE_API_BASE || "http://localhost:8000";
+        const res = await fetch(
+          `${apiBase}/api/hcl-onboarding?status=InProgress`,
+          {
+            headers: { Authorization: `Bearer ${authToken}` },
+            signal: controller.signal,
+          }
+        );
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(
+            body.detail || res.statusText || "Failed to load demands"
+          );
+        }
+        const data = await res.json();
+        const items: HclOnboardingRow[] = Array.isArray(data?.items)
+          ? data.items
+          : [];
+        const normalized = items.map((row) => ({
+          sap_id: row.sap_id || "",
+          unique_job_posting_id: row.unique_job_posting_id || "",
+          demand_id: row.demand_id || "",
+          candidate_contact: row.candidate_contact || "",
+          candidate_email: row.candidate_email || "",
+          hcl_onboarding_status: row.hcl_onboarding_status || "",
+          hire_loss_reason: row.hire_loss_reason || "",
+          onboarded_date: row.onboarded_date
+            ? String(row.onboarded_date).slice(0, 10)
+            : "",
+          employee_name: row.employee_name || "",
+          employee_hcl_email: row.employee_hcl_email || "",
+        }));
+        setOpenDemandsRows(normalized);
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setOpenDemandsError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setOpenDemandsLoading(false);
+      }
+    };
+
+    load();
+    return () => controller.abort();
+  }, [authToken, openDemandsOpen]);
 
   useEffect(() => {
     const load = async () => {
@@ -612,6 +683,82 @@ const ChatWithDashboard = ({
     );
   };
 
+  const handleOpenDemandsClose = () => {
+    setOpenDemandsOpen(false);
+    setOpenDemandsEditing(null);
+    setOpenDemandsDraft(null);
+  };
+
+  const handleOpenDemandsEdit = (row: HclOnboardingRow) => {
+    setOpenDemandsEditing(row.unique_job_posting_id);
+    setOpenDemandsDraft({ ...row });
+    setOpenDemandsError(null);
+  };
+
+  const handleOpenDemandsChangeDraft = (patch: Partial<HclOnboardingRow>) => {
+    setOpenDemandsDraft((prev) => (prev ? { ...prev, ...patch } : prev));
+  };
+
+  const handleOpenDemandsCancel = () => {
+    setOpenDemandsEditing(null);
+    setOpenDemandsDraft(null);
+  };
+
+  const handleOpenDemandsSave = async () => {
+    if (!openDemandsDraft) return;
+    setOpenDemandsSaving(true);
+    try {
+      if (!authToken) {
+        throw new Error("Not authenticated");
+      }
+      const apiBase = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+      const payload: HclOnboardingRow & { onboarded_date: string | null } = {
+        ...openDemandsDraft,
+        onboarded_date:
+          openDemandsDraft.hcl_onboarding_status === "Onboarded" &&
+          openDemandsDraft.onboarded_date
+            ? openDemandsDraft.onboarded_date
+            : null,
+      };
+
+      const res = await fetch(
+        `${apiBase}/api/hcl-onboarding/${encodeURIComponent(
+          openDemandsDraft.unique_job_posting_id
+        )}`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(
+          body.detail || res.statusText || "Failed to update onboarding"
+        );
+      }
+      setOpenDemandsRows((prev) =>
+        prev.map((r) =>
+          r.unique_job_posting_id === openDemandsDraft.unique_job_posting_id
+            ? {
+                ...openDemandsDraft,
+                onboarded_date: payload.onboarded_date || "",
+              }
+            : r
+        )
+      );
+      setOpenDemandsEditing(null);
+      setOpenDemandsDraft(null);
+    } catch (err) {
+      setOpenDemandsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setOpenDemandsSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-3">
       {selectedDashboardId && (
@@ -724,6 +871,13 @@ const ChatWithDashboard = ({
                   className="inline-flex items-center rounded-lg border border-emerald-600 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-400 dark:border-emerald-400 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-slate-800"
                 >
                   Update Job Posting
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOpenDemandsOpen(true)}
+                  className="inline-flex items-center rounded-lg border border-indigo-600 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 shadow-sm hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:border-indigo-400 dark:bg-slate-900 dark:text-indigo-200 dark:hover:bg-slate-800"
+                >
+                  Open Demands
                 </button>
               </div>
             </div>
@@ -877,6 +1031,21 @@ const ChatWithDashboard = ({
         rows={reportRows}
         onEditRecord={handleEditRecord}
         onDeleted={handleDeletedRecord}
+      />
+
+      <OpenDemandModal
+        open={openDemandsOpen}
+        rows={openDemandsRows}
+        loading={openDemandsLoading}
+        error={openDemandsError}
+        onClose={handleOpenDemandsClose}
+        editingId={openDemandsEditing}
+        draft={openDemandsDraft}
+        onEdit={handleOpenDemandsEdit}
+        onChangeDraft={handleOpenDemandsChangeDraft}
+        onSave={handleOpenDemandsSave}
+        onCancel={handleOpenDemandsCancel}
+        saving={openDemandsSaving}
       />
     </div>
   );

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useId } from "react";
 
 export type HclOnboardingFormState = {
   sap_id: string;
@@ -23,6 +23,45 @@ const HclOnboardingStatus: React.FC<HclOnboardingStatusProps> = ({
   value,
   onChange,
 }) => {
+  const checkboxId = useId();
+  const reasonLabelId = `${checkboxId}-label`;
+  const hireLossChecked = value.hcl_onboarding_status === "Hire Loss";
+
+  useEffect(() => {
+    if (!value.hire_loss_reason) {
+      onChange({ hire_loss_reason: "NA" });
+    }
+  }, [value.hire_loss_reason, onChange]);
+
+  const handleHireLossToggle = (checked: boolean) => {
+    if (checked) {
+      onChange({
+        hcl_onboarding_status: "Hire Loss",
+        hire_loss_reason:
+          value.hire_loss_reason === "NA" ? "" : value.hire_loss_reason,
+      });
+      return;
+    }
+    onChange({
+      hcl_onboarding_status: "",
+      hire_loss_reason: "NA",
+    });
+  };
+
+  const handleStatusChange = (status: string) => {
+    onChange({
+      hcl_onboarding_status: status,
+      onboarded_date: status === "Onboarded" ? value.onboarded_date : "",
+    });
+  };
+
+  const onboardingOptions = [
+    { value: "Selected", label: "Selected" },
+    { value: "InProgress", label: "InProgress" },
+    { value: "Onboarded", label: "Onboarded" },
+    { value: "Hire Loss", label: "Hire Loss" },
+  ];
+
   return (
     <div className="space-y-4">
       <div className="grid gap-4 md:grid-cols-2">
@@ -41,6 +80,7 @@ const HclOnboardingStatus: React.FC<HclOnboardingStatusProps> = ({
             className={inputClasses}
             value={value.candidate_contact}
             onChange={(e) => onChange({ candidate_contact: e.target.value })}
+            disabled
             required
           />
         </label>
@@ -53,29 +93,56 @@ const HclOnboardingStatus: React.FC<HclOnboardingStatusProps> = ({
             className={inputClasses}
             value={value.candidate_email}
             onChange={(e) => onChange({ candidate_email: e.target.value })}
+            disabled
           />
         </label>
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-slate-700">Onboarding Status</span>
-          <input
+          <select
             className={inputClasses}
             value={value.hcl_onboarding_status}
-            onChange={(e) =>
-              onChange({ hcl_onboarding_status: e.target.value })
-            }
-          />
+            onChange={(e) => handleStatusChange(e.target.value)}
+            disabled={hireLossChecked}
+          >
+            <option value="">---Select Status---</option>
+            {onboardingOptions.map((opt) => (
+              <option
+                key={opt.value}
+                value={opt.value}
+                disabled={
+                  opt.value === "Hire Loss" ? !hireLossChecked : hireLossChecked
+                }
+              >
+                {opt.label}
+              </option>
+            ))}
+          </select>
         </label>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-slate-700">Hire/Loss Reason</span>
+        <div className="flex flex-col gap-1 text-sm">
+          <label
+            htmlFor={checkboxId}
+            className="font-medium text-slate-700 flex items-center gap-2 cursor-pointer select-none"
+          >
+            <input
+              id={checkboxId}
+              type="checkbox"
+              aria-label="Hire Loss"
+              checked={hireLossChecked}
+              onChange={(e) => handleHireLossToggle(e.target.checked)}
+            />
+            <span id={reasonLabelId}>Hire/Loss Reason</span>
+          </label>
           <textarea
             className={`${inputClasses} min-h-[80px]`}
             value={value.hire_loss_reason}
             onChange={(e) => onChange({ hire_loss_reason: e.target.value })}
+            disabled={!hireLossChecked}
+            aria-labelledby={reasonLabelId}
           />
-        </label>
+        </div>
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-slate-700">Onboarded Date</span>
           <input
@@ -83,6 +150,7 @@ const HclOnboardingStatus: React.FC<HclOnboardingStatusProps> = ({
             className={inputClasses}
             value={value.onboarded_date}
             onChange={(e) => onChange({ onboarded_date: e.target.value })}
+            disabled={value.hcl_onboarding_status !== "Onboarded"}
           />
         </label>
       </div>

@@ -49,6 +49,18 @@ def _serialize(row: HclOnboardingStatus) -> dict:
     }
 
 
+@router.get("")
+def list_onboarding(
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    query = db.query(HclOnboardingStatus)
+    if status:
+        query = query.filter(HclOnboardingStatus.hcl_onboarding_status == status)
+    rows = query.all()
+    return {"items": [_serialize(r) for r in rows]}
+
+
 @router.get("/{unique_job_posting_id}")
 def get_onboarding(
     unique_job_posting_id: str,
@@ -69,14 +81,14 @@ def get_onboarding(
     return _serialize(row)
 
 
-@router.put("/{sap_id}")
+@router.put("/{unique_job_posting_id}")
 def upsert_onboarding(
-    sap_id: str, payload: HclOnboardingIn, db: Session = Depends(get_db)
+    unique_job_posting_id: str, payload: HclOnboardingIn, db: Session = Depends(get_db)
 ) -> dict:
-    if payload.sap_id and payload.sap_id != sap_id:
+    if not payload.sap_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="sap_id in path and payload must match",
+            detail="sap_id is required",
         )
     if not payload.unique_job_posting_id or not payload.demand_id or not payload.candidate_contact:
         raise HTTPException(
@@ -84,15 +96,16 @@ def upsert_onboarding(
             detail="unique_job_posting_id, demand_id, and candidate_contact are required",
         )
 
-    existing = db.query(HclOnboardingStatus).filter(HclOnboardingStatus.sap_id == sap_id).first()
+    existing = (
+        db.query(HclOnboardingStatus)
+        .filter(HclOnboardingStatus.unique_job_posting_id == unique_job_posting_id)
+        .filter(HclOnboardingStatus.demand_id == payload.demand_id)
+        .filter(HclOnboardingStatus.candidate_contact == payload.candidate_contact)
+        .first()
+    )
     now = datetime.utcnow()
 
     if existing:
-        if existing.unique_job_posting_id != payload.unique_job_posting_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="unique_job_posting_id mismatch for this sap_id",
-            )
         data = payload.dict(exclude_unset=True)
         data.pop("sap_id", None)
         data["modified_at"] = now
@@ -112,7 +125,7 @@ def upsert_onboarding(
         return {"operation": "updated", "record": _serialize(existing)}
 
     data = payload.dict(exclude_unset=True)
-    data["sap_id"] = sap_id
+    data["sap_id"] = payload.sap_id
     data.setdefault("created_at", now)
     data.setdefault("modified_at", now)
     data.setdefault("created_by", payload.created_by or "system")

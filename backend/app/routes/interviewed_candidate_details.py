@@ -87,7 +87,17 @@ def list_candidates(
 @router.put("/bulk")
 def upsert_candidates(payload: BulkUpsertPayload, db: Session = Depends(get_db)) -> dict:
     if not payload.records:
-        return {"inserted": 0, "updated": 0}
+        deleted = (
+            db.query(InterviewedCandidateDetails)
+            .filter(
+                InterviewedCandidateDetails.unique_job_posting_id
+                == payload.unique_job_posting_id,
+                InterviewedCandidateDetails.demand_id == payload.demand_id,
+            )
+            .delete()
+        )
+        db.commit()
+        return {"inserted": 0, "updated": 0, "deleted": deleted}
 
     inserted = 0
     updated = 0
