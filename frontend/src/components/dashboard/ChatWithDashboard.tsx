@@ -390,6 +390,12 @@ const ChatWithDashboard = ({
       return val === null || val === undefined ? "(blank)" : String(val);
     };
 
+    const valueFor = (row: Record<string, unknown>, col: string) => {
+      if (col in row) return row[col];
+      const suffix = col.includes(".") ? col.split(".").slice(-1)[0] : col;
+      return row[suffix];
+    };
+
     const matchesSelection = (
       col: string,
       selectedValues: string[],
@@ -427,15 +433,35 @@ const ChatWithDashboard = ({
       return selectedValues.some((v) => norm(v) === norm(label));
     };
 
-    const rowsAfterFilter = filterBy
-      ? rows.filter((row) =>
-          matchesSelection(filterBy, filterValues, row[filterBy])
+    const activeFilters = (cfg.filters || [])
+      .filter((f: any) => f.field && f.value)
+      .map((f: any) => {
+        const col = f.field || "";
+        const prefixed =
+          f.table && !col.includes(".") ? `${f.table}.${col}` : col;
+        return { ...f, column: prefixed };
+      });
+
+    const rowsAfterFilter = rows.filter((row) => {
+      const primaryMatches = filterBy
+        ? matchesSelection(filterBy, filterValues, valueFor(row, filterBy))
+        : true;
+      if (!primaryMatches) return false;
+
+      if (!activeFilters.length) return true;
+
+      return activeFilters.every((f: any) =>
+        matchesSelection(
+          f.column || f.field || "",
+          [f.value],
+          valueFor(row, f.column || f.field || "")
         )
-      : rows;
+      );
+    });
 
     if (groupBy) {
       const filteredRows = rowsAfterFilter.filter((row) =>
-        matchesSelection(groupBy, groupValues, row[groupBy])
+        matchesSelection(groupBy, groupValues, valueFor(row, groupBy))
       );
 
       const showGroupColumn = groupValues.length !== 1;
@@ -451,19 +477,19 @@ const ChatWithDashboard = ({
       >();
 
       filteredRows.forEach((row) => {
-        const groupKeyRaw = row[groupBy];
+        const groupKeyRaw = valueFor(row, groupBy);
         const groupLabel = toLabelFor(groupBy, groupValues, groupKeyRaw);
 
         const keyParts = [
           groupLabel,
-          ...columns.map((c) => String(row[c] ?? "")),
+          ...columns.map((c) => String(valueFor(row, c) ?? "")),
         ];
         const key = keyParts.join("|");
 
         if (!grouped.has(key)) {
           const baseRow: Record<string, unknown> = {};
           columns.forEach((c) => {
-            baseRow[c] = row[c];
+            baseRow[c] = valueFor(row, c);
           });
           if (showGroupColumn) {
             baseRow[groupBy] = groupLabel;
@@ -486,7 +512,7 @@ const ChatWithDashboard = ({
     const rowsOut = rowsAfterFilter.slice(0, 50).map((row) => {
       const out: Record<string, unknown> = {};
       columns.forEach((c) => {
-        out[c] = row[c];
+        out[c] = valueFor(row, c);
       });
       return out;
     });
@@ -498,17 +524,23 @@ const ChatWithDashboard = ({
     const filterValues: string[] = cfg.filter_values || [];
     const groupBy = cfg.group_by || "";
     const groupValues: string[] = cfg.group_by_values || [];
-    if (!filterBy || !filterValues.length) return "";
+    const filters: { table?: string; field?: string; value?: string }[] =
+      cfg.filters || [];
+    const joinedTables: string[] = cfg.joined_tables || [];
     const normalize = (s: string) =>
       s.toLowerCase().replace(/[^a-z0-9]+/g, "_");
-    const isDateBucket = normalize(filterBy) === "jp_posting_date_to_hcl";
+    const isDateBucket = normalize(filterBy || "") === "jp_posting_date_to_hcl";
     const quarterPattern = /^Q[1-4](?:\s+\d{4})?$/i;
     const isQuarterVals = filterValues.every((v) => quarterPattern.test(v));
     const isDayRangeVals = filterValues.every(
       (v) => /^\d+\s*-\s*\d+$/.test(v) || /^\d+\+$/.test(v)
     );
     // Derived buckets: don't send to backend when explicitly filtering on date bucket
-    if (isDateBucket && (isQuarterVals || isDayRangeVals)) return "";
+    const skipServerFilter =
+      filterBy &&
+      filterValues.length &&
+      isDateBucket &&
+      (isQuarterVals || isDayRangeVals);
 
     const params = new URLSearchParams();
     let targetFilterBy = filterBy;
@@ -536,8 +568,21 @@ const ChatWithDashboard = ({
       }
     }
 
-    params.set("filter_by", targetFilterBy);
-    targetValues.forEach((v) => params.append("filter_values", v));
+    if (targetFilterBy && !skipServerFilter && targetValues.length) {
+      params.set("filter_by", targetFilterBy);
+      targetValues.forEach((v) => params.append("filter_values", v));
+    }
+    filters
+      .filter((f) => f.field && f.value)
+      .forEach((f) => {
+        const col = f.field || "";
+        const prefixed =
+          f.table && !col.includes(".") ? `${f.table}.${col}` : col;
+        params.append("filters", `${prefixed}:${f.value}`);
+      });
+    joinedTables
+      .filter(Boolean)
+      .forEach((t) => params.append("joined_tables", t));
     const qs = params.toString();
     return qs ? `&${qs}` : "";
   };
@@ -567,7 +612,23 @@ const ChatWithDashboard = ({
         const datasetId = cfg.dataset_id;
         if (!datasetId) continue;
         try {
-          const filterQs = buildFilterQuery(cfg);
+          const joined = new Set<string>(cfg.joined_tables || []);
+          const collectPrefix = (val?: string) => {
+            if (!val || !val.includes(".")) return;
+            const prefix = val.split(".")[0];
+            if (prefix && prefix !== datasetId) joined.add(prefix);
+          };
+          (cfg.fields || []).forEach(collectPrefix);
+          collectPrefix(cfg.group_by);
+          collectPrefix(cfg.filter_by);
+          (cfg.filters || []).forEach((f: any) => {
+            collectPrefix(f.field);
+            if (f.table && f.table !== datasetId) joined.add(f.table);
+          });
+          const filterQs = buildFilterQuery({
+            ...cfg,
+            joined_tables: Array.from(joined),
+          });
           const limit = cfg.group_by ? 2000 : 50;
           const res = await fetch(
             `${apiBase}/api/admin/datasets/${datasetId}/records?limit=${limit}${filterQs}`,
@@ -907,7 +968,9 @@ const ChatWithDashboard = ({
                 return (
                   <div
                     key={item.widgetId}
-                    className="flex h-[420px] flex-col space-y-3 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-800 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                    className={`flex flex-col space-y-3 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-800 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${
+                      isCollapsed ? "h-[120px]" : "h-[420px]"
+                    }`}
                   >
                     <div className="flex items-center justify-between gap-3">
                       <div className="text-sm font-semibold text-slate-900 dark:text-white">

@@ -1,21 +1,24 @@
 from datetime import datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, String
-from sqlalchemy.orm import declarative_base
 
-from app.db import engine
-
-Base = declarative_base()
+from app.db import Base
 
 
 class OptumOnboardingStatus(Base):
     __tablename__ = "optum_onboarding_status"
 
-    customer_employee_id = Column(String(128), primary_key=True)
+    customer_employee_id = Column(String(128), nullable=True)
     unique_job_posting_id = Column(
         String(128), ForeignKey("customer_requirements.unique_job_posting_id"), nullable=False, index=True
     )
-    sap_id = Column(String(128), ForeignKey("hcl_onboarding_status.sap_id"), nullable=False, index=True)
+    sap_id = Column(
+        String(128),
+        ForeignKey("hcl_onboarding_status.sap_id"),
+        nullable=False,
+        index=True,
+        primary_key=True,
+    )
     customer_onboarding_status = Column(String(128))
     customer_onboarded_date = Column(DateTime)
     customer_employee_name = Column(String(255))
@@ -30,6 +33,3 @@ class OptumOnboardingStatus(Base):
     modified_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     created_by = Column(String(128))
     modified_by = Column(String(128))
-
-
-Base.metadata.create_all(bind=engine)

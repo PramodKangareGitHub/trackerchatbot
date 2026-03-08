@@ -230,49 +230,6 @@ const DashboardSelectorActions = ({
           </div>
         )}
       </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        {datasets.length ? (
-          <select
-            value={activeDatasetId}
-            onChange={(e) => onSelectDataset(e.target.value)}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-          >
-            {datasets.map((ds) => (
-              <option key={ds.id} value={ds.id}>
-                {ds.original_file_name || ds.table_name || ds.id}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <span className="text-xs text-slate-500 dark:text-slate-400">
-            No datasets available
-          </span>
-        )}
-        {scopedWidgets.length > 0 && (
-          <>
-            <select
-              value={previewWidgetId ?? ""}
-              onChange={(e) => setPreviewWidgetId(e.target.value)}
-              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-            >
-              {scopedWidgets.map(({ widget, widgetIdx, widgetKey }) => (
-                <option key={widgetKey} value={widgetKey}>
-                  {widget.title || `Widget ${widgetIdx + 1}`}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => setShowPreview(true)}
-              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-              disabled={!previewWidgetId}
-            >
-              View
-            </button>
-          </>
-        )}
-      </div>
     </div>
   );
 };

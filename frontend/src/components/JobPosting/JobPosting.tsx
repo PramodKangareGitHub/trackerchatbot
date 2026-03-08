@@ -100,7 +100,7 @@ const defaultHclDemand: HclDemandFormState = {
   demand_approved_date: "",
   tag_first_profile_sourced_date: "",
   tsc_first_profile_sourced_date: "",
-  tp_profiles_requested: "Yes",
+  tp_profiles_requested: "No",
   tp_vendor_name: "",
   tp_profiles_requested_date: "",
   tp_first_profile_sourced_date: "",
@@ -140,7 +140,7 @@ const defaultOnboarding: HclOnboardingFormState = {
 const defaultOptumOnboarding: OptumOnboardingFormState = {
   customer_employee_id: "",
   sap_id: "",
-  customer_onboarding_status: "",
+  customer_onboarding_status: "InProgress",
   customer_onboarded_date: "",
   customer_employee_name: "",
   customer_email: "",
@@ -193,6 +193,10 @@ const JobPosting: React.FC<JobPostingProps> = ({
     useState<OptumOnboardingFormState>(defaultOptumOnboarding);
   const [initialOptumOnboarding, setInitialOptumOnboarding] =
     useState<OptumOnboardingFormState>(defaultOptumOnboarding);
+  const [errorModal, setErrorModal] = useState<{
+    open: boolean;
+    message: string;
+  }>({ open: false, message: "" });
 
   useEffect(() => {
     const uniqueId = initialRequirement?.unique_job_posting_id;
@@ -340,6 +344,13 @@ const JobPosting: React.FC<JobPostingProps> = ({
       setOpenSections((prev) => ({ ...prev, onboarding: true }));
     }
   }, [showHclOnboarding]);
+
+  useEffect(() => {
+    if (onboarding.hcl_onboarding_status === "Onboarded") {
+      setShowOptumOnboarding(true);
+      setOpenSections((prev) => ({ ...prev, optumOnboarding: true }));
+    }
+  }, [onboarding.hcl_onboarding_status]);
 
   useEffect(() => {
     const uniqueId = initialRequirement?.unique_job_posting_id;
@@ -594,25 +605,69 @@ const JobPosting: React.FC<JobPostingProps> = ({
       throw new Error("Demand ID is required to save HCL demand.");
     }
 
+    if (hclHasChanges) {
+      const missing: string[] = [];
+      if (!hclDemand.tag_spoc.trim()) missing.push("TAG SPOC");
+      if (!hclDemand.tsc_spoc.trim()) missing.push("TSC SPOC");
+      if (!hclDemand.demand_created_date.trim())
+        missing.push("Demand Created Date");
+      if (!hclDemand.demand_status.trim()) missing.push("Demand Status");
+      if (!hclDemand.demand_approved_date.trim())
+        missing.push("Demand Approved Date");
+      if (!hclDemand.tag_first_profile_sourced_date.trim())
+        missing.push("TAG First Profile Sourced Date");
+      if (!hclDemand.tsc_first_profile_sourced_date.trim())
+        missing.push("TSC First Profile Sourced Date");
+      if (!hclDemand.tp_profiles_requested.trim())
+        missing.push("TP Profiles Requested");
+      if (missing.length) {
+        throw new Error(
+          `The following HCL Demand fields are required when updating: ${missing.join(", ")}.`
+        );
+      }
+    }
+
     if (candidateHasChanges && !hclDemand.demand_id.trim()) {
       throw new Error("Demand ID is required to save interviewed candidates.");
     }
 
+    if (candidateHasChanges) {
+      const missingTpVendorFor: string[] = candidates
+        .filter((c) => (c.candidate_type || "").trim() === "TP")
+        .filter((c) => !(c.tp_vendor_name || "").trim())
+        .map(
+          (c) =>
+            c.candidate_contact || c.candidate_name || "(unknown candidate)"
+        );
+      if (missingTpVendorFor.length) {
+        throw new Error(
+          `For candidate type TP, TP Vendor Name is required. Missing for: ${missingTpVendorFor.join(", ")}`
+        );
+      }
+    }
+
     const shouldSaveOnboarding =
-      onboardingHasChanges &&
-      onboarding.sap_id.trim() &&
-      onboarding.candidate_contact.trim();
+      onboardingHasChanges && onboarding.candidate_contact.trim();
 
     if (onboardingHasChanges && !shouldSaveOnboarding) {
       throw new Error(
-        "SAP ID and candidate contact are required to save onboarding status."
+        "Candidate contact is required to save onboarding status."
+      );
+    }
+
+    if (
+      onboardingHasChanges &&
+      onboarding.hcl_onboarding_status === "Onboarded" &&
+      !onboarding.onboarded_date.trim()
+    ) {
+      throw new Error(
+        "Onboarded Date is required when Onboarding Status is Onboarded."
       );
     }
 
     const shouldSaveOptumOnboarding =
       optumOnboardingHasChanges &&
       hclDemand.demand_id.trim() &&
-      optumOnboarding.customer_employee_id.trim() &&
       optumOnboarding.sap_id.trim();
 
     if (optumOnboardingHasChanges && !hclDemand.demand_id.trim()) {
@@ -620,9 +675,39 @@ const JobPosting: React.FC<JobPostingProps> = ({
     }
 
     if (optumOnboardingHasChanges && !shouldSaveOptumOnboarding) {
-      throw new Error(
-        "Customer employee ID and SAP ID are required to save Optum onboarding."
-      );
+      throw new Error("SAP ID is required to save Optum onboarding.");
+    }
+
+    if (
+      optumOnboardingHasChanges &&
+      optumOnboarding.customer_onboarding_status.trim() === "Onboarded"
+    ) {
+      const missing: string[] = [];
+      if (!optumOnboarding.customer_employee_id.trim()) {
+        missing.push("Customer Employee ID");
+      }
+      if (!optumOnboarding.customer_onboarded_date.trim()) {
+        missing.push("Customer Onboarded Date");
+      }
+      if (missing.length) {
+        throw new Error(
+          `When Customer Onboarding Status is Onboarded, the following fields are required: ${missing.join(", ")}.`
+        );
+      }
+    }
+
+    if (hclHasChanges && hclDemand.tp_profiles_requested === "Yes") {
+      const missing: string[] = [];
+      if (!hclDemand.tp_vendor_name.trim()) missing.push("TP Vendor Name");
+      if (!hclDemand.tp_profiles_requested_date.trim())
+        missing.push("TP Profiles Requested Date");
+      if (!hclDemand.tp_first_profile_sourced_date.trim())
+        missing.push("TP First Profile Sourced Date");
+      if (missing.length) {
+        throw new Error(
+          `When TP Profiles Requested is Yes, the following fields are required: ${missing.join(", ")}.`
+        );
+      }
     }
 
     const apiBase = import.meta.env.VITE_API_BASE || "http://localhost:8000";
@@ -790,6 +875,13 @@ const JobPosting: React.FC<JobPostingProps> = ({
           ...optumOnboarding,
           unique_job_posting_id: uniqueId,
           demand_id: hclDemand.demand_id.trim(),
+          customer_employee_id:
+            optumOnboarding.customer_employee_id.trim() || "NA",
+          sap_id: optumOnboarding.sap_id.trim(),
+          customer_onboarded_date:
+            optumOnboarding.customer_onboarded_date?.trim() || null,
+          billing_start_date:
+            optumOnboarding.billing_start_date?.trim() || null,
           created_by: currentUser || undefined,
           modified_by: currentUser || undefined,
         };
@@ -828,6 +920,10 @@ const JobPosting: React.FC<JobPostingProps> = ({
     } finally {
       setUpdating(false);
     }
+  };
+
+  const showErrorModal = (message: string) => {
+    setErrorModal({ open: true, message });
   };
 
   return (
@@ -977,6 +1073,7 @@ const JobPosting: React.FC<JobPostingProps> = ({
             currentUser={currentUser ?? undefined}
             formId={formId}
             onUpdateRequest={handleCombinedUpdate}
+            onError={showErrorModal}
           />
         )}
       </AccordionItem>
@@ -1214,87 +1311,108 @@ const JobPosting: React.FC<JobPostingProps> = ({
             <HclOnboardingStatus
               value={onboarding}
               onChange={(patch) =>
-                setOnboarding((prev) => ({
-                  ...prev,
-                  ...patch,
-                }))
+                setOnboarding((prev) => {
+                  const next = { ...prev, ...patch };
+                  const nextStatus =
+                    patch.hcl_onboarding_status ?? prev.hcl_onboarding_status;
+                  const nextSap = (patch.sap_id ?? prev.sap_id).trim();
+
+                  if (nextStatus === "Onboarded") {
+                    if (nextSap) {
+                      setOptumOnboarding((optPrev) => ({
+                        ...optPrev,
+                        sap_id: nextSap,
+                      }));
+                    }
+                    setShowOptumOnboarding(true);
+                    setOpenSections((prevSections) => ({
+                      ...prevSections,
+                      optumOnboarding: true,
+                    }));
+                  }
+                  return next;
+                })
               }
             />
           )}
         </AccordionItem>
       )}
 
-      {isEditMode && (viewOnly || showOptumOnboarding) && (
-        <AccordionItem
-          title="Optum Onboarding Status"
-          isOpen={openSections.optumOnboarding}
-          onToggle={() =>
-            setOpenSections((prev) => ({
-              ...prev,
-              optumOnboarding: !prev.optumOnboarding,
-            }))
-          }
-        >
-          {viewOnly ? (
-            <DisplayGrid
-              fields={[
-                {
-                  label: "Customer Employee ID",
-                  value: optumOnboarding.customer_employee_id,
-                },
-                { label: "SAP ID", value: optumOnboarding.sap_id },
-                {
-                  label: "Customer Onboarding Status",
-                  value: optumOnboarding.customer_onboarding_status,
-                },
-                {
-                  label: "Customer Onboarded Date",
-                  value: optumOnboarding.customer_onboarded_date,
-                },
-                {
-                  label: "Customer Employee Name",
-                  value: optumOnboarding.customer_employee_name,
-                },
-                {
-                  label: "Customer Email",
-                  value: optumOnboarding.customer_email,
-                },
-                {
-                  label: "Customer Login ID",
-                  value: optumOnboarding.customer_login_id,
-                },
-                { label: "Customer LOB", value: optumOnboarding.customer_lob },
-                {
-                  label: "Billing Start Date",
-                  value: optumOnboarding.billing_start_date,
-                },
-                {
-                  label: "Laptop Required",
-                  value: optumOnboarding.customer_laptop_required,
-                },
-                {
-                  label: "Laptop Status",
-                  value: optumOnboarding.customer_laptop_status,
-                },
-                {
-                  label: "Laptop Serial No",
-                  value: optumOnboarding.customer_laptop_serial_no,
-                },
-              ]}
-            />
-          ) : (
-            <OptumOnboardingStatus
-              value={optumOnboarding}
-              onChange={(patch) =>
-                setOptumOnboarding((prev) => ({
-                  ...prev,
-                  ...patch,
-                }))
-              }
-            />
-          )}
-        </AccordionItem>
-      )}
+      {isEditMode &&
+        (viewOnly || showOptumOnboarding || optumOnboarding.sap_id.trim()) && (
+          <AccordionItem
+            title="Customer Onboarding Status"
+            isOpen={openSections.optumOnboarding}
+            onToggle={() =>
+              setOpenSections((prev) => ({
+                ...prev,
+                optumOnboarding: !prev.optumOnboarding,
+              }))
+            }
+          >
+            {viewOnly ? (
+              <DisplayGrid
+                fields={[
+                  {
+                    label: "Customer Employee ID",
+                    value: optumOnboarding.customer_employee_id,
+                  },
+                  { label: "SAP ID", value: optumOnboarding.sap_id },
+                  {
+                    label: "Customer Onboarding Status",
+                    value: optumOnboarding.customer_onboarding_status,
+                  },
+                  {
+                    label: "Customer Onboarded Date",
+                    value: optumOnboarding.customer_onboarded_date,
+                  },
+                  {
+                    label: "Customer Employee Name",
+                    value: optumOnboarding.customer_employee_name,
+                  },
+                  {
+                    label: "Customer Email",
+                    value: optumOnboarding.customer_email,
+                  },
+                  {
+                    label: "Customer Login ID",
+                    value: optumOnboarding.customer_login_id,
+                  },
+                  {
+                    label: "Customer LOB",
+                    value: optumOnboarding.customer_lob,
+                  },
+                  {
+                    label: "Billing Start Date",
+                    value: optumOnboarding.billing_start_date,
+                  },
+                  {
+                    label: "Laptop Required",
+                    value: optumOnboarding.customer_laptop_required,
+                  },
+                  {
+                    label: "Laptop Status",
+                    value: optumOnboarding.customer_laptop_status,
+                  },
+                  {
+                    label: "Laptop Serial No",
+                    value: optumOnboarding.customer_laptop_serial_no,
+                  },
+                ]}
+              />
+            ) : (
+              <OptumOnboardingStatus
+                value={optumOnboarding}
+                onChange={(patch) =>
+                  setOptumOnboarding((prev) => ({
+                    ...prev,
+                    ...patch,
+                  }))
+                }
+              />
+            )}
+          </AccordionItem>
+        )}
 
       {isEditMode && !viewOnly && (
         <div className="flex justify-end">
@@ -1306,6 +1424,28 @@ const JobPosting: React.FC<JobPostingProps> = ({
           >
             {updating ? "Updating..." : "Update"}
           </button>
+        </div>
+      )}
+
+      {errorModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900">
+            <div className="mb-4 text-lg font-semibold text-slate-900 dark:text-slate-50">
+              Validation Error
+            </div>
+            <div className="mb-6 whitespace-pre-wrap text-sm text-slate-700 dark:text-slate-200">
+              {errorModal.message}
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setErrorModal({ open: false, message: "" })}
+                className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-300 dark:border-slate-600 dark:text-slate-100 dark:hover:bg-slate-800"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

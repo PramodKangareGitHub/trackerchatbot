@@ -1,4 +1,4 @@
-import React, { useEffect, useId } from "react";
+import React, { useEffect, useState } from "react";
 
 export type HclOnboardingFormState = {
   sap_id: string;
@@ -23,9 +23,11 @@ const HclOnboardingStatus: React.FC<HclOnboardingStatusProps> = ({
   value,
   onChange,
 }) => {
-  const checkboxId = useId();
-  const reasonLabelId = `${checkboxId}-label`;
   const hireLossChecked = value.hcl_onboarding_status === "Hire Loss";
+  const [confirmOnboardOpen, setConfirmOnboardOpen] = useState(false);
+  const [confirmOnboardDate, setConfirmOnboardDate] = useState<string>("");
+  const [confirmOnboardError, setConfirmOnboardError] = useState<string>("");
+  const [sapAlertOpen, setSapAlertOpen] = useState(false);
 
   useEffect(() => {
     if (!value.hire_loss_reason) {
@@ -33,30 +35,43 @@ const HclOnboardingStatus: React.FC<HclOnboardingStatusProps> = ({
     }
   }, [value.hire_loss_reason, onChange]);
 
-  const handleHireLossToggle = (checked: boolean) => {
-    if (checked) {
-      onChange({
-        hcl_onboarding_status: "Hire Loss",
-        hire_loss_reason:
-          value.hire_loss_reason === "NA" ? "" : value.hire_loss_reason,
-      });
-      return;
+  useEffect(() => {
+    if (!value.hcl_onboarding_status) {
+      onChange({ hcl_onboarding_status: "InProgress" });
     }
+  }, [value.hcl_onboarding_status, onChange]);
+
+  const applyStatusChange = (status: string, onboardedDate?: string) => {
+    const isHireLoss = status === "Hire Loss";
     onChange({
-      hcl_onboarding_status: "",
-      hire_loss_reason: "NA",
+      hcl_onboarding_status: status,
+      onboarded_date:
+        status === "Onboarded" ? (onboardedDate ?? value.onboarded_date) : "",
+      hire_loss_reason: isHireLoss
+        ? value.hire_loss_reason === "NA"
+          ? ""
+          : value.hire_loss_reason
+        : "NA",
     });
   };
 
   const handleStatusChange = (status: string) => {
-    onChange({
-      hcl_onboarding_status: status,
-      onboarded_date: status === "Onboarded" ? value.onboarded_date : "",
-    });
+    if (status === "Onboarded" && !value.sap_id.trim()) {
+      setSapAlertOpen(true);
+      return;
+    }
+
+    if (status === "Onboarded") {
+      setConfirmOnboardDate(value.onboarded_date || "");
+      setConfirmOnboardError("");
+      setConfirmOnboardOpen(true);
+      return;
+    }
+
+    applyStatusChange(status);
   };
 
   const onboardingOptions = [
-    { value: "Selected", label: "Selected" },
     { value: "InProgress", label: "InProgress" },
     { value: "Onboarded", label: "Onboarded" },
     { value: "Hire Loss", label: "Hire Loss" },
@@ -66,12 +81,11 @@ const HclOnboardingStatus: React.FC<HclOnboardingStatusProps> = ({
     <div className="space-y-4">
       <div className="grid gap-4 md:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-slate-700">SAP ID*</span>
+          <span className="font-medium text-slate-700">SAP ID</span>
           <input
             className={inputClasses}
             value={value.sap_id}
             onChange={(e) => onChange({ sap_id: e.target.value })}
-            required
           />
         </label>
         <label className="flex flex-col gap-1 text-sm">
@@ -102,17 +116,10 @@ const HclOnboardingStatus: React.FC<HclOnboardingStatusProps> = ({
             className={inputClasses}
             value={value.hcl_onboarding_status}
             onChange={(e) => handleStatusChange(e.target.value)}
-            disabled={hireLossChecked}
+            disabled={value.hcl_onboarding_status === "Onboarded"}
           >
-            <option value="">---Select Status---</option>
             {onboardingOptions.map((opt) => (
-              <option
-                key={opt.value}
-                value={opt.value}
-                disabled={
-                  opt.value === "Hire Loss" ? !hireLossChecked : hireLossChecked
-                }
-              >
+              <option key={opt.value} value={opt.value}>
                 {opt.label}
               </option>
             ))}
@@ -122,25 +129,12 @@ const HclOnboardingStatus: React.FC<HclOnboardingStatusProps> = ({
 
       <div className="grid gap-4 md:grid-cols-2">
         <div className="flex flex-col gap-1 text-sm">
-          <label
-            htmlFor={checkboxId}
-            className="font-medium text-slate-700 flex items-center gap-2 cursor-pointer select-none"
-          >
-            <input
-              id={checkboxId}
-              type="checkbox"
-              aria-label="Hire Loss"
-              checked={hireLossChecked}
-              onChange={(e) => handleHireLossToggle(e.target.checked)}
-            />
-            <span id={reasonLabelId}>Hire/Loss Reason</span>
-          </label>
+          <span className="font-medium text-slate-700">Hire/Loss Reason</span>
           <textarea
             className={`${inputClasses} min-h-[80px]`}
             value={value.hire_loss_reason}
             onChange={(e) => onChange({ hire_loss_reason: e.target.value })}
             disabled={!hireLossChecked}
-            aria-labelledby={reasonLabelId}
           />
         </div>
         <label className="flex flex-col gap-1 text-sm">
@@ -154,6 +148,79 @@ const HclOnboardingStatus: React.FC<HclOnboardingStatusProps> = ({
           />
         </label>
       </div>
+
+      {confirmOnboardOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl">
+            <div className="mb-3 text-base font-semibold text-slate-900">
+              Are you sure you want to onboard?
+            </div>
+
+            <label className="mb-3 flex flex-col gap-1 text-sm">
+              <span className="font-medium text-slate-700">
+                Onboarded Date*
+              </span>
+              <input
+                type="date"
+                className={inputClasses}
+                value={confirmOnboardDate}
+                onChange={(e) => {
+                  setConfirmOnboardDate(e.target.value);
+                  setConfirmOnboardError("");
+                }}
+              />
+              {confirmOnboardError && (
+                <span className="text-xs font-semibold text-amber-700">
+                  {confirmOnboardError}
+                </span>
+              )}
+            </label>
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                onClick={() => setConfirmOnboardOpen(false)}
+              >
+                No
+              </button>
+              <button
+                type="button"
+                className="rounded bg-sky-600 px-3 py-1.5 text-sm font-semibold text-white shadow hover:bg-sky-700"
+                onClick={() => {
+                  if (!confirmOnboardDate.trim()) {
+                    setConfirmOnboardError("Onboarded Date is required.");
+                    return;
+                  }
+                  applyStatusChange("Onboarded", confirmOnboardDate);
+                  setConfirmOnboardOpen(false);
+                }}
+              >
+                Yes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {sapAlertOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl">
+            <div className="mb-3 text-base font-semibold text-slate-900">
+              Please enter SAP ID before marking Onboarded.
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                className="rounded bg-sky-600 px-3 py-1.5 text-sm font-semibold text-white shadow hover:bg-sky-700"
+                onClick={() => setSapAlertOpen(false)}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-4 md:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm">

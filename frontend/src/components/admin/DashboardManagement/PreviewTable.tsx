@@ -99,6 +99,20 @@ const PreviewTable = ({ tableConfig, data }: PreviewTableProps) => {
   const groupValues = tableConfig.group_by_values || [];
   const filterBy = tableConfig.filter_by || "";
   const filterValues = tableConfig.filter_values || [];
+  const activeFilters = (tableConfig.filters || [])
+    .filter((f) => f.field && f.value)
+    .map((f) => {
+      const col = f.field || "";
+      const prefixed =
+        f.table && !col.includes(".") ? `${f.table}.${col}` : col;
+      return { ...f, column: prefixed };
+    });
+
+  const valueFor = (row: Record<string, unknown>, col: string) => {
+    if (col in row) return row[col];
+    const suffix = col.includes(".") ? col.split(".").slice(-1)[0] : col;
+    return row[suffix];
+  };
 
   const matchesSelection = (col: string, values: string[], rowVal: unknown) => {
     if (!values.length) return true;
@@ -131,15 +145,26 @@ const PreviewTable = ({ tableConfig, data }: PreviewTableProps) => {
     return values.some((v) => norm(v) === norm(label));
   };
 
-  const rowsAfterFilter = filterBy
-    ? data.rows.filter((row) =>
-        matchesSelection(filterBy, filterValues, row[filterBy])
+  const rowsAfterFilter = data.rows.filter((row) => {
+    const primaryMatches = filterBy
+      ? matchesSelection(filterBy, filterValues, valueFor(row, filterBy))
+      : true;
+    if (!primaryMatches) return false;
+
+    if (!activeFilters.length) return true;
+
+    return activeFilters.every((f) =>
+      matchesSelection(
+        f.column || f.field || "",
+        [f.value],
+        valueFor(row, f.column || f.field || "")
       )
-    : data.rows;
+    );
+  });
 
   if (groupBy) {
     const filteredRows = rowsAfterFilter.filter((row) => {
-      const key = row[groupBy];
+      const key = valueFor(row, groupBy);
       return matchesSelection(groupBy, groupValues, key);
     });
 
@@ -158,19 +183,19 @@ const PreviewTable = ({ tableConfig, data }: PreviewTableProps) => {
     >();
 
     filteredRows.forEach((row) => {
-      const groupKeyRaw = row[groupBy];
+      const groupKeyRaw = valueFor(row, groupBy);
       const groupLabel = toLabel(groupBy, groupValues, groupKeyRaw);
 
       const keyParts = [
         groupLabel,
-        ...columns.map((c) => String(row[c] ?? "")),
+        ...columns.map((c) => String(valueFor(row, c) ?? "")),
       ];
       const key = keyParts.join("|");
 
       if (!grouped.has(key)) {
         const baseRow: Record<string, unknown> = {};
         columns.forEach((c) => {
-          baseRow[c] = row[c];
+          baseRow[c] = valueFor(row, c);
         });
         if (showGroupColumn) {
           baseRow[groupBy] = groupLabel;
@@ -204,7 +229,7 @@ const PreviewTable = ({ tableConfig, data }: PreviewTableProps) => {
   const rows = rowsAfterFilter.slice(0, 50).map((row) => {
     const trimmed: Record<string, unknown> = {};
     columns.forEach((c) => {
-      trimmed[c] = row[c];
+      trimmed[c] = valueFor(row, c);
     });
     return trimmed;
   });

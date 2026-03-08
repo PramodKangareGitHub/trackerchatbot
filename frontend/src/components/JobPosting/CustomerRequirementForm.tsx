@@ -63,6 +63,7 @@ export type CustomerRequirementFormProps = {
   onUpdateRequest?: (
     payload: Partial<CustomerRequirementRecord>
   ) => Promise<void> | void;
+  onError?: (message: string) => void;
 };
 
 const selectFieldClasses =
@@ -76,6 +77,7 @@ const CustomerRequirementForm: React.FC<CustomerRequirementFormProps> = ({
   initialRecord,
   formId,
   onUpdateRequest,
+  onError,
 }) => {
   const toStr = (v: unknown) =>
     v === null || v === undefined ? "" : String(v);
@@ -590,7 +592,9 @@ const CustomerRequirementForm: React.FC<CustomerRequirementFormProps> = ({
       try {
         await onUpdateRequest(payload);
       } catch (err) {
-        alert(err instanceof Error ? err.message : String(err));
+        const msg = err instanceof Error ? err.message : String(err);
+        if (onError) onError(msg);
+        else alert(msg);
       }
       return;
     }

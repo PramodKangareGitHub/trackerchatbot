@@ -19,24 +19,39 @@ export type Dashboard = {
 
 export type WidgetType = "table" | "chart";
 
+export type FieldRef = { table: string; column: string; alias?: string };
+
 export type TableConfig = {
-  dataset_id?: string;
-  fields?: string[];
+  dataset_id?: string; // legacy single-table config
+  joined_tables?: string[]; // new: multi-table selection keyed on unique_job_posting_id
+  fields?: string[]; // legacy field list
+  field_refs?: FieldRef[]; // new: table-qualified fields
+  join_key?: string; // new: key for joining tables
   group_by?: string;
+  group_by_ref?: FieldRef;
   group_by_values?: string[];
   filter_by?: string;
+  filter_by_ref?: FieldRef;
   filter_values?: string[];
+  filters?: { table?: string; field: string; value: string }[]; // new: multiple where clauses
 };
 
 export type ChartConfig = {
   dataset_id?: string;
+  joined_tables?: string[];
   x_field?: string;
   y_field?: string;
+  join_key?: string; // new: key for joining tables
+  x_ref?: FieldRef;
+  y_ref?: FieldRef;
   chart_type?: "bar" | "line" | "pie";
   group_by?: string;
+  group_by_ref?: FieldRef;
   group_by_values?: string[];
   filter_by?: string;
+  filter_by_ref?: FieldRef;
   filter_values?: string[];
+  filters?: { table?: string; field: string; value: string }[];
 };
 
 export type Widget = {

@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api/optum-onboarding", tags=["optum-onboarding"])
 
 class OptumOnboardingIn(BaseModel):
     unique_job_posting_id: str
-    customer_employee_id: str
+    customer_employee_id: Optional[str] = None
     sap_id: str
     customer_onboarding_status: Optional[str] = None
     customer_onboarded_date: Optional[datetime] = None
@@ -66,10 +66,10 @@ def get_optum_onboarding(
     query = db.query(OptumOnboardingStatus).filter(
         OptumOnboardingStatus.unique_job_posting_id == unique_job_posting_id
     )
-    if customer_employee_id:
-        query = query.filter(OptumOnboardingStatus.customer_employee_id == customer_employee_id)
     if sap_id:
         query = query.filter(OptumOnboardingStatus.sap_id == sap_id)
+    elif customer_employee_id:
+        query = query.filter(OptumOnboardingStatus.customer_employee_id == customer_employee_id)
 
     row = query.first()
     if not row:
@@ -86,29 +86,25 @@ def upsert_optum_onboarding(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="unique_job_posting_id in path and payload must match",
         )
-    if not payload.customer_employee_id or not payload.sap_id:
+    if not payload.sap_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="customer_employee_id and sap_id are required",
+            detail="sap_id is required",
         )
 
-    existing = (
-        db.query(OptumOnboardingStatus)
-        .filter(OptumOnboardingStatus.customer_employee_id == payload.customer_employee_id)
-        .first()
-    )
+    existing = db.query(OptumOnboardingStatus).filter(OptumOnboardingStatus.sap_id == payload.sap_id).first()
     now = datetime.utcnow()
 
     if existing:
         if existing.unique_job_posting_id != payload.unique_job_posting_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="unique_job_posting_id mismatch for this customer_employee_id",
+                detail="unique_job_posting_id mismatch for this sap_id",
             )
         data = payload.dict(exclude_unset=True)
         data["modified_at"] = now
         data["modified_by"] = payload.modified_by or existing.modified_by or "system"
-        data.pop("customer_employee_id", None)  # primary key should not change
+        data.pop("sap_id", None)  # primary key should not change
         for key, value in data.items():
             setattr(existing, key, value)
         try:

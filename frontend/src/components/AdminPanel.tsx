@@ -381,20 +381,43 @@ const AdminPanel = ({
 
   const loadPreviewData = async (widget: Widget | undefined) => {
     if (!widget) return;
-    const config =
-      widget.widget_type === "chart"
-        ? getChartConfig(widget)
-        : getTableConfig(widget);
+    const isChart = widget.widget_type === "chart";
+    const config = isChart ? getChartConfig(widget) : getTableConfig(widget);
     const datasetId = config.dataset_id || "";
     if (!datasetId) {
       setPreviewError("Select a dataset to preview.");
       setPreviewData(null);
       return;
     }
+
+    const joined = new Set<string>(config.joined_tables || []);
+    const collectPrefix = (val?: string) => {
+      if (!val || !val.includes(".")) return;
+      const prefix = val.split(".")[0];
+      if (prefix && prefix !== datasetId) joined.add(prefix);
+    };
+    if (!isChart) {
+      (config as TableConfig).fields?.forEach(collectPrefix);
+    }
+    collectPrefix(config.group_by);
+    collectPrefix(config.filter_by);
+    if (isChart) {
+      collectPrefix((config as ChartConfig).x_field);
+      collectPrefix((config as ChartConfig).y_field);
+    }
+    (config.filters || []).forEach((f) => {
+      collectPrefix(f.field);
+      if (f.table && f.table !== datasetId) joined.add(f.table);
+    });
+    const joinedTables = Array.from(joined);
+
     setPreviewLoading(true);
     setPreviewError(null);
     try {
-      const filterQs = buildFilterQuery(config);
+      const filterQs = buildFilterQuery({
+        ...config,
+        joined_tables: joinedTables,
+      });
       const limit = config.group_by ? 2000 : 50;
       const data = await api<{
         columns: string[];
@@ -699,11 +722,13 @@ const AdminPanel = ({
     const base = (widget.config as TableConfig) || {};
     return {
       dataset_id: base.dataset_id || datasets[0]?.id || "",
+      joined_tables: base.joined_tables || [],
       fields: base.fields || [],
       group_by: base.group_by || "",
       group_by_values: base.group_by_values || [],
       filter_by: base.filter_by || "",
       filter_values: base.filter_values || [],
+      filters: base.filters || [],
     };
   };
 
@@ -711,6 +736,7 @@ const AdminPanel = ({
     const base = (widget.config as ChartConfig) || {};
     return {
       dataset_id: base.dataset_id || datasets[0]?.id || "",
+      joined_tables: base.joined_tables || [],
       x_field: base.x_field || "",
       y_field: base.y_field || "",
       chart_type: base.chart_type || "bar",
@@ -718,6 +744,7 @@ const AdminPanel = ({
       group_by_values: base.group_by_values || [],
       filter_by: base.filter_by || "",
       filter_values: base.filter_values || [],
+      filters: base.filters || [],
     };
   };
 
@@ -834,27 +861,40 @@ const AdminPanel = ({
   const buildFilterQuery = (config: {
     filter_by?: string;
     filter_values?: string[];
+    filters?: { table?: string; field?: string; value?: string }[];
+    joined_tables?: string[];
   }) => {
-    if (!config.filter_by || !(config.filter_values || []).length) return "";
     const normalize = (s: string) =>
       s.toLowerCase().replace(/[^a-z0-9]+/g, "_");
     const isDateBucket =
-      normalize(config.filter_by) === "jp_posting_date_to_hcl";
+      normalize(config.filter_by || "") === "jp_posting_date_to_hcl";
     const vals = config.filter_values || [];
     const quarterPattern = /^Q[1-4](?:\s+\d{4})?$/i;
     const isQuarterVals = vals.every((v) => quarterPattern.test(v));
     const isDayRangeVals = vals.every(
       (v) => /^\d+\s*-\s*\d+$/.test(v) || /^\d+\+$/.test(v)
     );
-    if (isDateBucket && (isQuarterVals || isDayRangeVals)) {
-      // Derived buckets; filter on client side only.
-      return "";
-    }
+    const skipServerFilter =
+      config.filter_by &&
+      vals.length &&
+      isDateBucket &&
+      (isQuarterVals || isDayRangeVals);
     const params = new URLSearchParams();
-    params.set("filter_by", config.filter_by);
-    (config.filter_values || []).forEach((v) =>
-      params.append("filter_values", v)
-    );
+    if (config.filter_by && !skipServerFilter && vals.length) {
+      params.set("filter_by", config.filter_by);
+      (config.filter_values || []).forEach((v) =>
+        params.append("filter_values", v)
+      );
+    }
+    (config.filters || [])
+      .filter((f) => f.field && f.value)
+      .forEach((f) => {
+        const prefix = f.table ? `${f.table}.` : "";
+        params.append("filters", `${prefix}${f.field}:${f.value}`);
+      });
+    (config.joined_tables || [])
+      .filter(Boolean)
+      .forEach((t) => params.append("joined_tables", t));
     const qs = params.toString();
     return qs ? `&${qs}` : "";
   };

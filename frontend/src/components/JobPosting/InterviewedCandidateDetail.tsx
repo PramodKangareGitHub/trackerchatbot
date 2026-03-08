@@ -49,12 +49,23 @@ const interviewStatusesWithSkipped = [
   { value: "Skipped", label: "Skipped" },
 ];
 
+const tpVendorOptions = [
+  "Devlabs",
+  "Adenai",
+  "3K Technologies",
+  "Highbro Technologies",
+];
+
 const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
   value,
   onChange,
   onOnboard,
 }) => {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [showTpVendorSuggestions, setShowTpVendorSuggestions] = useState(false);
+  const [candidateErrors, setCandidateErrors] = useState<string[]>([]);
+  const [activeBackup, setActiveBackup] =
+    useState<InterviewedCandidateFormState | null>(null);
 
   const createBlank = (): InterviewedCandidateFormState => ({
     candidate_contact: "",
@@ -81,6 +92,32 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
       (a.candidate_contact || "").localeCompare(b.candidate_contact || "")
     );
   }, [value]);
+
+  const filteredTpVendors = useMemo(() => {
+    const term = (value[activeIndex ?? -1]?.tp_vendor_name || "").toLowerCase();
+    return tpVendorOptions.filter((v) => v.toLowerCase().includes(term));
+  }, [activeIndex, value]);
+
+  const validateActiveCandidate = () => {
+    if (!activeCandidate) return true;
+    const name = activeCandidate.candidate_name.trim();
+    const contact = activeCandidate.candidate_contact.trim();
+    const email = activeCandidate.candidate_email.trim();
+    const type = activeCandidate.candidate_type.trim();
+    const isTp = activeCandidate.candidate_type === "TP";
+    const vendorMissing = isTp && !activeCandidate.tp_vendor_name.trim();
+
+    const errors: string[] = [];
+    if (!name) errors.push("Candidate Name is required.");
+    if (!contact) errors.push("Candidate Contact is required.");
+    if (!email) errors.push("Candidate Email is required.");
+    if (!type) errors.push("Candidate Type is required.");
+    if (vendorMissing)
+      errors.push("TP Vendor Name is required when Candidate Type is TP.");
+
+    setCandidateErrors(errors);
+    return errors.length === 0;
+  };
 
   const activeCandidate =
     activeIndex === null ? null : (value[activeIndex] ?? null);
@@ -267,7 +304,10 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
   const addCandidate = () => {
     const next = [...value, createBlank()];
     onChange(next);
-    setActiveIndex(next.length - 1);
+    const newIndex = next.length - 1;
+    setActiveBackup({ ...createBlank() });
+    setActiveIndex(newIndex);
+    setCandidateErrors([]);
   };
 
   const removeCandidate = (idx: number) => {
@@ -275,16 +315,35 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
     onChange(next);
     if (next.length === 0) {
       setActiveIndex(null);
+      setCandidateErrors([]);
+      setActiveBackup(null);
       return;
     }
     if (activeIndex === idx) {
       setActiveIndex(null);
+      setCandidateErrors([]);
+      setActiveBackup(null);
     } else if (activeIndex !== null && activeIndex > idx) {
       setActiveIndex(activeIndex - 1);
     }
   };
 
-  const closeSheet = () => setActiveIndex(null);
+  const closeSheet = () => {
+    setActiveIndex(null);
+    setCandidateErrors([]);
+    setShowTpVendorSuggestions(false);
+    setActiveBackup(null);
+  };
+
+  const cancelSheet = () => {
+    if (activeIndex !== null && activeBackup) {
+      const restored = value.map((row, i) =>
+        i === activeIndex ? activeBackup : row
+      );
+      onChange(restored);
+    }
+    closeSheet();
+  };
 
   return (
     <div className="relative">
@@ -328,9 +387,12 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() =>
-                    setActiveIndex(originalIndex === -1 ? idx : originalIndex)
-                  }
+                  onClick={() => {
+                    const target = originalIndex === -1 ? idx : originalIndex;
+                    setActiveBackup({ ...(value[target] || row) });
+                    setActiveIndex(target);
+                    setCandidateErrors([]);
+                  }}
                   className="rounded border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-100"
                 >
                   Edit
@@ -381,15 +443,38 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={closeSheet}
+                  className="rounded border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-100"
+                  onClick={() => {
+                    if (!validateActiveCandidate()) return;
+                    closeSheet();
+                  }}
+                >
+                  Save & Close
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelSheet}
                   className="rounded border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
                 >
-                  Close
+                  Cancel
                 </button>
               </div>
             </div>
 
             <div className="space-y-3 p-5">
+              {candidateErrors.length > 0 && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+                    Please fix the following
+                  </div>
+                  <ul className="list-disc space-y-1 pl-4 text-xs font-semibold">
+                    {candidateErrors.map((err) => (
+                      <li key={err}>{err}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-slate-700">
@@ -408,7 +493,7 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-slate-700">
-                    Candidate Name
+                    Candidate Name*
                   </span>
                   <input
                     className={inputClasses}
@@ -420,7 +505,7 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-slate-700">
-                    Candidate Email
+                    Candidate Email*
                   </span>
                   <input
                     className={inputClasses}
@@ -432,15 +517,25 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-slate-700">
-                    Candidate Type
+                    Candidate Type*
                   </span>
-                  <input
+                  <select
                     className={inputClasses}
                     value={activeCandidate.candidate_type}
                     onChange={(e) =>
-                      setField(activeIndex, { candidate_type: e.target.value })
+                      setField(activeIndex, {
+                        candidate_type: e.target.value,
+                        ...(e.target.value !== "TP"
+                          ? { tp_vendor_name: "" }
+                          : {}),
+                      })
                     }
-                  />
+                  >
+                    <option value="">---Select Candidate Type---</option>
+                    <option value="TSC">TSC</option>
+                    <option value="TAG">TAG</option>
+                    <option value="TP">TP</option>
+                  </select>
                 </label>
               </div>
 
@@ -449,13 +544,53 @@ const InterviewedCandidateDetail: React.FC<InterviewedCandidateDetailProps> = ({
                   <span className="font-medium text-slate-700">
                     TP Vendor Name
                   </span>
-                  <input
-                    className={inputClasses}
-                    value={activeCandidate.tp_vendor_name}
-                    onChange={(e) =>
-                      setField(activeIndex, { tp_vendor_name: e.target.value })
-                    }
-                  />
+                  <div className="relative">
+                    <input
+                      className={inputClasses}
+                      value={activeCandidate.tp_vendor_name}
+                      disabled={activeCandidate.candidate_type !== "TP"}
+                      placeholder={
+                        activeCandidate.candidate_type === "TP"
+                          ? "Start typing to search vendors or enter a new one"
+                          : "Enable by selecting Candidate Type = TP"
+                      }
+                      onChange={(e) => {
+                        setField(activeIndex, {
+                          tp_vendor_name: e.target.value,
+                        });
+                        setShowTpVendorSuggestions(true);
+                      }}
+                      onFocus={() =>
+                        activeCandidate.candidate_type === "TP" &&
+                        setShowTpVendorSuggestions(true)
+                      }
+                      onBlur={() =>
+                        setTimeout(() => setShowTpVendorSuggestions(false), 150)
+                      }
+                    />
+                    {activeCandidate.candidate_type === "TP" &&
+                      showTpVendorSuggestions &&
+                      filteredTpVendors.length > 0 && (
+                        <div className="absolute z-20 mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-900">
+                          {filteredTpVendors.map((option) => (
+                            <button
+                              type="button"
+                              key={option}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => {
+                                setField(activeIndex, {
+                                  tp_vendor_name: option,
+                                });
+                                setShowTpVendorSuggestions(false);
+                              }}
+                              className="block w-full px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+                            >
+                              {option}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                  </div>
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-slate-700">

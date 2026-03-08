@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 import io
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -14,6 +14,7 @@ from sqlalchemy import func, or_, text
 
 from app.db import engine, get_db
 from app.models.dashboard import Dashboard
+from app.models.dataset import Dataset
 from app.models.dashboard_widget import DashboardWidget
 from app.models.user import User
 from app.models.role import Role
@@ -40,6 +41,38 @@ router = APIRouter(
 
 HOME_DASHBOARD_ID = "home"
 HOME_DASHBOARD_NAME = "Home"
+
+
+def _inspect_table_columns(table_name: str) -> List[str]:
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(f'PRAGMA table_info("{table_name}")')).fetchall()
+        return [r[1] for r in rows]
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Failed to inspect table: {exc}") from exc
+
+
+def _resolve_table_and_columns(
+    dataset_id: str, dataset: Dataset | None, table_override: str | None = None
+) -> Tuple[str, List[str]]:
+    candidates: List[str] = []
+    if table_override:
+        candidates.append(table_override)
+    if dataset and dataset.table_name:
+        candidates.append(dataset.table_name)
+    candidates.append(dataset_id)
+    candidates.append(f"data_{dataset_id}")
+
+    for table_name in candidates:
+        cols: List[str] = []
+        if dataset and table_name == dataset.table_name and dataset.columns_json:
+            cols = list(dataset.columns_json or [])
+        if not cols:
+            cols = _inspect_table_columns(table_name)
+        if cols:
+            return table_name, cols
+
+    raise HTTPException(status_code=404, detail="Dataset not found")
 
 
 def normalize_role_name(name: str) -> str:
@@ -602,45 +635,150 @@ async def admin_list_records(
     offset: int = 0,
     filter_by: Optional[str] = Query(default=None),
     filter_values: Optional[List[str]] = Query(default=None),
+    filters: Optional[List[str]] = Query(default=None),
+    joined_tables: Optional[List[str]] = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     dataset = get_dataset(dataset_id, db)
-    if dataset is None:
+
+    def discover_columns(table_name: str) -> List[str]:
+        try:
+            with engine.connect() as conn:
+                rows = conn.execute(text(f'PRAGMA table_info("{table_name}")')).fetchall()
+            return [r[1] for r in rows]
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to inspect table: {exc}") from exc
+
+    def resolve_table(table_id: str) -> tuple[str, List[str]]:
+        ds = get_dataset(table_id, db)
+        try:
+            return _resolve_table_and_columns(table_id, ds, None)
+        except HTTPException:
+            # fallback to raw table name
+            cols = discover_columns(table_id)
+            return table_id, cols
+
+    base_table_name, base_columns = resolve_table(dataset_id)
+    if not base_columns:
         raise HTTPException(status_code=404, detail="Dataset not found")
+
+    join_ids = [t for t in (joined_tables or []) if t]
+    join_entries: List[tuple[str, str, List[str]]] = []
+    for tbl_id in join_ids:
+        t_name, t_cols = resolve_table(tbl_id)
+        if t_name == base_table_name:
+            continue
+        join_entries.append((tbl_id, t_name, t_cols))
+
+    # Build lookup maps for validation and alias resolution
+    table_entries: List[tuple[str, str, List[str]]] = [(dataset_id, base_table_name, base_columns)] + join_entries
+    columns_by_key: Dict[str, List[str]] = {}
+    alias_by_key: Dict[str, str] = {}
+    for tid, tname, tcols in table_entries:
+        columns_by_key[tid] = tcols
+        columns_by_key[tname] = tcols
+        alias_by_key[tid] = tname
+        alias_by_key[tname] = tname
 
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
 
-    columns = list(dataset.columns_json or [])
     where_clauses: List[str] = []
     params: Dict[str, Any] = {"limit": limit, "offset": offset}
 
+    join_filter_clauses: List[str] = []
+
     if filter_by:
-        if filter_by not in columns:
+        prefix = filter_by.split(".")[0] if "." in filter_by else dataset_id
+        column = filter_by.split(".")[-1]
+        if prefix not in columns_by_key or column not in columns_by_key[prefix]:
             raise HTTPException(status_code=400, detail="Filter column not found in dataset")
+        table_alias = alias_by_key[prefix]
         if filter_values:
             placeholders = []
             for idx, val in enumerate(filter_values):
                 key = f"fv_{idx}"
                 placeholders.append(f":{key}")
                 params[key] = val
-            clause = f'"{filter_by}" IN ({", ".join(placeholders)})'
-            where_clauses.append(clause)
+            clause = f'"{table_alias}"."{column}" IN ({", ".join(placeholders)})'
+            if table_alias == base_table_name:
+                where_clauses.append(clause)
+            else:
+                join_filter_clauses.append(
+                    f"EXISTS (SELECT 1 FROM \"{table_alias}\" jf WHERE jf.\"unique_job_posting_id\" = \"{base_table_name}\".\"unique_job_posting_id\" AND {clause})"
+                )
+
+    if filters:
+        for idx, raw in enumerate(filters):
+            if ":" not in raw:
+                continue
+            field, value = raw.split(":", 1)
+            prefix = field.split(".")[0] if "." in field else dataset_id
+            column = field.split(".")[-1]
+            if prefix not in columns_by_key or column not in columns_by_key[prefix]:
+                raise HTTPException(status_code=400, detail="Filter column not found in dataset")
+            table_alias = alias_by_key[prefix]
+            key = f"multi_f_{idx}"
+            clause = f'"{table_alias}"."{column}" = :{key}'
+            params[key] = value
+            if table_alias == base_table_name:
+                where_clauses.append(clause)
+            else:
+                join_filter_clauses.append(
+                    f"EXISTS (SELECT 1 FROM \"{table_alias}\" jf WHERE jf.\"unique_job_posting_id\" = \"{base_table_name}\".\"unique_job_posting_id\" AND {clause})"
+                )
 
     try:
-        where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
-        with engine.connect() as conn:
-            rows = conn.execute(
-                text(
-                    f'SELECT rowid AS rowid, * FROM "{dataset.table_name}"{where_sql} LIMIT :limit OFFSET :offset'
-                ),
-                params,
-            ).mappings().all()
-            total = conn.execute(
-                text(f'SELECT COUNT(*) AS c FROM "{dataset.table_name}"{where_sql}'),
-                params,
-            ).scalar_one()
+        all_where_clauses = where_clauses + join_filter_clauses
+        if not join_entries:
+            where_sql = " WHERE " + " AND ".join(all_where_clauses) if all_where_clauses else ""
+            with engine.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        f'SELECT rowid AS rowid, * FROM "{base_table_name}"{where_sql} LIMIT :limit OFFSET :offset'
+                    ),
+                    params,
+                ).mappings().all()
+                total = conn.execute(
+                    text(f'SELECT COUNT(*) AS c FROM "{base_table_name}"{where_sql}'),
+                    params,
+                ).scalar_one()
+            columns = base_columns
+        else:
+            base_alias = dataset_id
+            select_cols = [f'"{base_table_name}"."rowid" AS "rowid"']
+            columns: List[str] = []
+            columns.extend([f"{base_alias}.{c}" for c in base_columns])
+            for tid, _, tcols in join_entries:
+                columns.extend([f"{tid}.{c}" for c in tcols])
+            for col in base_columns:
+                select_cols.append(f'"{base_table_name}"."{col}" AS "{base_alias}.{col}"')
+            for tid, tbl_name, tcols in join_entries:
+                for col in tcols:
+                    select_cols.append(f'"{tbl_name}"."{col}" AS "{tid}.{col}"')
+
+            join_sql = " ".join(
+                [
+                    f'LEFT JOIN "{tbl_name}" ON "{tbl_name}"."unique_job_posting_id" = "{base_table_name}"."unique_job_posting_id"'
+                    for _, tbl_name, _ in join_entries
+                ]
+            )
+            all_where_clauses = where_clauses + join_filter_clauses
+            where_sql = " WHERE " + " AND ".join(all_where_clauses) if all_where_clauses else ""
+            with engine.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        f'SELECT {", ".join(select_cols)} FROM "{base_table_name}" {join_sql}{where_sql} LIMIT :limit OFFSET :offset'
+                    ),
+                    params,
+                ).mappings().all()
+                total = conn.execute(
+                    text(
+                        f'SELECT COUNT(*) AS c FROM "{base_table_name}" {join_sql}{where_sql}'
+                    ),
+                    params,
+                ).scalar_one()
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Failed to fetch records: {exc}") from exc
 
@@ -658,16 +796,19 @@ async def admin_distinct_column_values(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    dataset = get_dataset(dataset_id, db)
-    if dataset is None:
-        raise HTTPException(status_code=404, detail="Dataset not found")
+    # Normalize potential table-qualified column names
+    table_override = None
+    if "." in column:
+        table_override, column = column.split(".", 1)
 
-    columns = list(dataset.columns_json or [])
+    dataset = get_dataset(dataset_id, db)
+
+    table_name, columns = _resolve_table_and_columns(dataset_id, dataset, table_override)
     if column not in columns:
         raise HTTPException(status_code=400, detail="Column not found in dataset")
 
     try:
-        values = fetch_distinct_values(dataset.table_name, column, engine=engine)
+        values = fetch_distinct_values(table_name, column, engine=engine)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Failed to fetch distinct values: {exc}") from exc
 
