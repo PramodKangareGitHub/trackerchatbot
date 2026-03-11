@@ -50,7 +50,7 @@ const OpenDemandModal: React.FC<OpenDemandModalProps> = ({
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
           <div>
             <div className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-              Open Demands
+              InProgress Onboarding Demands
             </div>
             {error && (
               <div className="text-xs text-rose-600 dark:text-rose-400">

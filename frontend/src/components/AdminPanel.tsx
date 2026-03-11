@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import RecordsSection from "./admin/RecordsSection";
 import UploadSection from "./admin/UploadSection";
 import UserManagementSection from "./admin/UserManagementSection";
 import DatasetManagementSection from "./admin/DatasetManagementSection";
@@ -24,11 +23,12 @@ import {
   persistBannerConfigs,
   readStoredBannerConfigs,
 } from "./dashboard/bannerUtils";
+import { buildFixedDatasets } from "./admin/fixedDatasets";
+import { TABLE_TOTAL_COLUMN } from "./dashboard/bannerUtils";
 
 type SectionId =
   | "upload"
   | "datasets"
-  | "records"
   | "dashboard"
   | "banners"
   | "users"
@@ -38,6 +38,12 @@ const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 const withBase = (path: string) => {
   const trimmedBase = API_BASE.replace(/\/+$/, "");
   return path.startsWith("http") ? path : `${trimmedBase}${path}`;
+};
+
+const DEFAULT_COLUMN_VALUES: Record<string, Record<string, string[]>> = {
+  hcl_onboarding_status: {
+    hcl_onboarding_status: ["InProgress", "Onboarded", "Hire Loss"],
+  },
 };
 
 type AdminPanelProps = {
@@ -58,7 +64,7 @@ const AdminPanel = ({
     []
   );
   const userRole: UserRole = useMemo(() => {
-    const normalized = normalizeRole(authUserRole);
+    const normalized = normalizeRole(authUserRole) as UserRole;
     if (normalized) return normalized;
     if (roleOptions.length) return roleOptions[0];
     return "leader";
@@ -71,27 +77,17 @@ const AdminPanel = ({
   const [uploading, setUploading] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
-
   const [selectedDatasetId, setSelectedDatasetId] = useState<string>("");
   const selectedDataset = useMemo(
     () => datasets.find((d) => d.id === selectedDatasetId),
     [datasets, selectedDatasetId]
   );
-
-  const [recordDraft, setRecordDraft] = useState<Record<string, string>>({});
-  const [records, setRecords] = useState<Record<string, unknown>[]>([]);
-  const [recordsTotal, setRecordsTotal] = useState(0);
-  const [recordsLoading, setRecordsLoading] = useState(false);
-  const [recordsPage, setRecordsPage] = useState(0);
-  const pageSize = 20;
   const [dashboards, setDashboards] = useState<Dashboard[]>([]);
   const [dashboardsLoading, setDashboardsLoading] = useState(false);
   const [selectedDashboardId, setSelectedDashboardId] = useState<string | null>(
     null
   );
   const [dashboardSaving, setDashboardSaving] = useState(false);
-  const [editRowId, setEditRowId] = useState<number | null>(null);
-  const [editDraft, setEditDraft] = useState<Record<string, unknown>>({});
   const [widgets, setWidgets] = useState<Widget[]>([]);
   const [activeSection, setActiveSection] = useState<SectionId>("dashboard");
   const [newUserEmail, setNewUserEmail] = useState("");
@@ -124,6 +120,7 @@ const AdminPanel = ({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [bannerConfigs, setBannerConfigs] = useState<BannerConfig[]>([]);
+  const [columnCache, setColumnCache] = useState<Record<string, string[]>>({});
 
   const authHeaders = useMemo(
     () => ({ Authorization: `Bearer ${authToken}` }),
@@ -168,7 +165,6 @@ const AdminPanel = ({
       const base: { id: SectionId; label: string; hint?: string }[] = [
         { id: "upload", label: "Upload", hint: "Excel" },
         { id: "datasets", label: "Data Sets" },
-        { id: "records", label: "Data Management" },
         { id: "dashboard", label: "Dashboard Management" },
         { id: "banners", label: "Banner Management" },
       ];
@@ -207,17 +203,39 @@ const AdminPanel = ({
     setError(null);
     try {
       const data = await api<Dataset[]>("/api/admin/datasets");
-      setDatasets(data);
-      if (data.length) {
-        const stillExists = data.some((d) => d.id === selectedDatasetId);
-        if (!stillExists) setSelectedDatasetId(data[0].id);
+      const merged = buildFixedDatasets(data || []);
+      setDatasets(merged);
+      if (merged.length) {
+        const stillExists = merged.some((d) => d.id === selectedDatasetId);
+        if (!stillExists) setSelectedDatasetId(merged[0].id);
       } else {
         setSelectedDatasetId("");
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setDatasetsLoading(false);
+    }
+  };
+
+  const loadDatasetColumns = async (datasetId: string): Promise<string[]> => {
+    if (!datasetId) return [];
+    if (columnCache[datasetId]?.length) return columnCache[datasetId];
+    try {
+      const data = await api<{ columns: string[] }>(
+        `/api/admin/datasets/${encodeURIComponent(datasetId)}/columns`
+      );
+      const cols = data.columns || [];
+      setColumnCache((prev) => ({ ...prev, [datasetId]: cols }));
+      setDatasets((prev) =>
+        prev.map((d) =>
+          d.id === datasetId || d.table_name === datasetId
+            ? { ...d, columns: cols }
+            : d
+        )
+      );
+      return cols;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return [];
     }
   };
 
@@ -274,7 +292,7 @@ const AdminPanel = ({
           userRole === "admin"
             ? safeRoles.length
               ? safeRoles
-              : [adminDefault]
+              : ([adminDefault] as UserRole[])
             : [userRole];
         return {
           ...w,
@@ -433,136 +451,11 @@ const AdminPanel = ({
   };
 
   useEffect(() => {
-    if (selectedDataset) {
-      const draft: Record<string, string> = {};
-      selectedDataset.columns.forEach((c) => {
-        draft[c] = "";
-      });
-      setRecordDraft(draft);
-      setEditRowId(null);
-      setEditDraft({});
-    }
-  }, [selectedDataset]);
-
-  useEffect(() => {
-    if (activeSection === "records") {
-      loadRecords(0);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSection, selectedDataset]);
-
-  useEffect(() => {
     if (activeSection === "users") {
       loadUsers();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSection]);
-
-  const loadRecords = async (page = 0) => {
-    if (!selectedDataset) return;
-    setRecordsLoading(true);
-    setError(null);
-    try {
-      const data = await api<{
-        columns: string[];
-        rows: Record<string, unknown>[];
-        total: number;
-      }>(
-        `/api/admin/datasets/${
-          selectedDataset.id
-        }/records?limit=${pageSize}&offset=${page * pageSize}`
-      );
-      setRecords(data.rows || []);
-      setRecordsTotal(data.total || 0);
-      setRecordsPage(page);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setRecordsLoading(false);
-    }
-  };
-
-  const handleAddRecord = async () => {
-    if (!selectedDataset) return;
-    try {
-      setActionLoading(true);
-      await api(`/api/admin/datasets/${selectedDataset.id}/records`, {
-        method: "POST",
-        body: JSON.stringify({ records: [recordDraft] }),
-      });
-      await loadDatasets();
-      await loadRecords(recordsPage);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleUpdateRecord = async () => {
-    if (!selectedDataset || editRowId === null) return;
-    try {
-      setActionLoading(true);
-      await api(
-        `/api/admin/datasets/${selectedDataset.id}/records/${editRowId}`,
-        {
-          method: "PUT",
-          body: JSON.stringify({ record: editDraft }),
-        }
-      );
-      setEditRowId(null);
-      setEditDraft({});
-      await loadDatasets();
-      await loadRecords(recordsPage);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleDeleteRecord = async (rowid: number) => {
-    if (!selectedDataset) return;
-    try {
-      setActionLoading(true);
-      await api(`/api/admin/datasets/${selectedDataset.id}/records/${rowid}`, {
-        method: "DELETE",
-      });
-      await loadDatasets();
-      const nextPage = recordsPage;
-      await loadRecords(nextPage);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleExport = async () => {
-    if (!selectedDataset) return;
-    try {
-      const res = await authedFetch(
-        `/api/admin/datasets/${selectedDataset.id}/export`
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || res.statusText || "Export failed");
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `${
-        selectedDataset.original_file_name ||
-        selectedDataset.table_name ||
-        "dataset"
-      }.csv`;
-      link.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
 
   const handleUpload = async () => {
     if (!uploadFile) {
@@ -861,8 +754,15 @@ const AdminPanel = ({
   const buildFilterQuery = (config: {
     filter_by?: string;
     filter_values?: string[];
-    filters?: { table?: string; field?: string; value?: string }[];
+    filters?: {
+      table?: string;
+      field?: string;
+      op?: string;
+      operator?: string;
+      value?: string | string[];
+    }[];
     joined_tables?: string[];
+    dataset_id?: string;
   }) => {
     const normalize = (s: string) =>
       s.toLowerCase().replace(/[^a-z0-9]+/g, "_");
@@ -886,13 +786,33 @@ const AdminPanel = ({
         params.append("filter_values", v)
       );
     }
+    const joinSet = new Set((config.joined_tables || []).filter(Boolean));
+    const baseTable = config.dataset_id || "";
+
     (config.filters || [])
-      .filter((f) => f.field && f.value)
+      .filter(
+        (f) => f.field && (Array.isArray(f.value) ? f.value.length : f.value)
+      )
       .forEach((f) => {
         const prefix = f.table ? `${f.table}.` : "";
-        params.append("filters", `${prefix}${f.field}:${f.value}`);
+        if (f.table && f.table !== baseTable) {
+          joinSet.add(f.table);
+        }
+        const rawValues = Array.isArray(f.value) ? f.value : [f.value];
+        const values = rawValues
+          .map((v) => String(v))
+          .filter((v) => v.trim().length);
+        if (!values.length) return;
+        const op = (f.op || f.operator || "in").toLowerCase();
+        const payload = {
+          field: `${prefix}${f.field}`,
+          table: f.table,
+          op,
+          values,
+        };
+        params.append("filters", JSON.stringify(payload));
       });
-    (config.joined_tables || [])
+    Array.from(joinSet)
       .filter(Boolean)
       .forEach((t) => params.append("joined_tables", t));
     const qs = params.toString();
@@ -938,24 +858,42 @@ const AdminPanel = ({
 
   const loadBannerColumnValues = useCallback(
     async (datasetId: string, column: string) => {
+      if (column === TABLE_TOTAL_COLUMN) return [];
       const data = await api<{ values: string[] }>(
         `/api/admin/datasets/${datasetId}/columns/${encodeURIComponent(
           column
         )}/values`
       );
-      return data.values || [];
+      const defaults =
+        DEFAULT_COLUMN_VALUES[datasetId]?.[column] ||
+        DEFAULT_COLUMN_VALUES[datasetId]?.[column.replace(/^.+\./, "") || ""] ||
+        [];
+      return Array.from(new Set([...(data.values || []), ...defaults]));
     },
     [api]
   );
 
   const loadBannerValueCounts = useCallback(
-    async (datasetId: string, column: string, selectedValues?: string[]) =>
+    async (
+      datasetId: string,
+      column: string,
+      selectedValues?: string[],
+      operator?: string,
+      filters?: {
+        table?: string;
+        field: string;
+        op?: string;
+        values?: string[];
+      }[]
+    ) =>
       fetchValueCounts({
         apiBase: API_BASE,
         authToken,
         datasetId,
         column,
-        allowedValues: selectedValues,
+        filterOp: operator,
+        filterValues: selectedValues,
+        filters,
       }),
     [authToken]
   );
@@ -1147,7 +1085,7 @@ const AdminPanel = ({
               ? filtered
               : [adminDefault]
             : [userRole];
-        return { ...w, ...patch, roles: nextRoles };
+        return { ...w, ...patch, roles: nextRoles as UserRole[] };
       })
     );
   };
@@ -1254,37 +1192,8 @@ const AdminPanel = ({
             datasets={datasets}
             datasetsLoading={datasetsLoading}
             actionLoading={actionLoading}
-            selectedDatasetId={selectedDatasetId}
-            onSelectDataset={setSelectedDatasetId}
             onDeleteDataset={handleDelete}
             onClearAll={handleClearAll}
-          />
-        );
-      case "records":
-        return (
-          <RecordsSection
-            datasets={datasets}
-            selectedDatasetId={selectedDatasetId}
-            onSelectDataset={setSelectedDatasetId}
-            selectedDataset={selectedDataset}
-            recordDraft={recordDraft}
-            setRecordDraft={setRecordDraft}
-            onAddRecord={handleAddRecord}
-            records={records}
-            recordsLoading={recordsLoading}
-            editRowId={editRowId}
-            setEditRowId={setEditRowId}
-            editDraft={editDraft}
-            setEditDraft={setEditDraft}
-            onUpdateRecord={handleUpdateRecord}
-            onDeleteRecord={handleDeleteRecord}
-            recordsPage={recordsPage}
-            recordsTotal={recordsTotal}
-            pageSize={pageSize}
-            onPageChange={(page) => loadRecords(page)}
-            onExport={handleExport}
-            onRefresh={() => loadRecords(recordsPage)}
-            actionLoading={actionLoading}
           />
         );
       case "users":
@@ -1336,6 +1245,7 @@ const AdminPanel = ({
             bannerConfigs={bannerConfigs}
             onSaveBanner={handleSaveBannerConfig}
             onDeleteBanner={handleDeleteBannerConfig}
+            loadColumns={loadDatasetColumns}
             loadColumnValues={loadBannerColumnValues}
             loadValueCounts={loadBannerValueCounts}
             userRole={userRole}
@@ -1398,6 +1308,7 @@ const AdminPanel = ({
             setGroupValueOptions={setGroupValueOptions}
             setError={setError}
             loadPreviewData={loadPreviewData}
+            loadColumns={loadDatasetColumns}
           />
         );
     }

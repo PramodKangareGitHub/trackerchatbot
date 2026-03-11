@@ -50,6 +50,7 @@ const ChatWithDashboard = ({
       widgetType?: string | null;
       config?: any;
       columns: string[];
+      displayColumns?: string[];
       rows: Record<string, unknown>[];
     }[]
   >([]);
@@ -283,7 +284,21 @@ const ChatWithDashboard = ({
     cfg: any,
     datasetCols: string[],
     rows: Record<string, unknown>[]
-  ): { columns: string[]; rows: Record<string, unknown>[] } => {
+  ): {
+    columns: string[];
+    displayColumns: string[];
+    rows: Record<string, unknown>[];
+  } => {
+    const formatHeader = (col: string) => {
+      const noPrefix = col.includes(".") ? col.split(".").pop() || col : col;
+      const spaced = noPrefix.replace(/[_\.]+/g, " ").trim();
+      if (!spaced) return col;
+      return spaced
+        .split(" ")
+        .filter(Boolean)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(" ");
+    };
     const groupBy = cfg.group_by || "";
     const groupValues: string[] = cfg.group_by_values || [];
     const filterBy = cfg.filter_by || "";
@@ -433,14 +448,102 @@ const ChatWithDashboard = ({
       return selectedValues.some((v) => norm(v) === norm(label));
     };
 
+    const normalizeOp = (op?: string) => {
+      const o = (op || "").toLowerCase();
+      if (o === "!=") return "not_in";
+      if (o === "=") return "in";
+      if (o === "neq") return "not_in";
+      if (o === "eq") return "in";
+      return o || "in";
+    };
+
+    const normalizeValue = (v: unknown) =>
+      typeof v === "string"
+        ? v.trim().toLowerCase()
+        : String(v ?? "")
+            .trim()
+            .toLowerCase();
+
+    const toNumeric = (v: unknown): number | null => {
+      if (v === null || v === undefined) return null;
+      const num = Number(v);
+      if (Number.isFinite(num)) return num;
+      const dt = new Date(String(v));
+      if (!Number.isNaN(dt.getTime())) return dt.getTime();
+      return null;
+    };
+
+    const matchesFilterOp = (
+      col: string,
+      op: string,
+      values: string[],
+      rowVal: unknown
+    ) => {
+      const normalizedOp = normalizeOp(op);
+      const rowLabel = toLabelFor(col, values, rowVal);
+      const rowNorm = normalizeValue(rowLabel);
+      const normVals = values
+        .map((v) => normalizeValue(v))
+        .filter((v) => v.length);
+
+      if (!normVals.length) return true;
+
+      if (
+        normalizedOp === "between" ||
+        normalizedOp === ">" ||
+        normalizedOp === ">=" ||
+        normalizedOp === "<" ||
+        normalizedOp === "<="
+      ) {
+        const rowNum = toNumeric(rowVal);
+        const nums = values
+          .map((v) => toNumeric(v))
+          .filter((v): v is number => v !== null);
+        if (rowNum === null || !nums.length) return false;
+        if (normalizedOp === "between") {
+          if (nums.length >= 2 && nums[1] !== undefined) {
+            return rowNum >= nums[0] && rowNum <= nums[1];
+          }
+          return rowNum >= nums[0];
+        }
+        const target = nums[0];
+        if (target === undefined) return false;
+        if (normalizedOp === ">") return rowNum > target;
+        if (normalizedOp === ">=") return rowNum >= target;
+        if (normalizedOp === "<") return rowNum < target;
+        return rowNum <= target;
+      }
+
+      if (normalizedOp === "contains") {
+        return normVals.some((v) => rowNorm.includes(v));
+      }
+
+      if (normalizedOp === "not_in") {
+        if (rowVal === null || rowVal === undefined || rowNorm === "")
+          return true;
+        return normVals.every((v) => v !== rowNorm);
+      }
+
+      return normVals.some((v) => v === rowNorm);
+    };
+
     const activeFilters = (cfg.filters || [])
-      .filter((f: any) => f.field && f.value)
+      .filter(
+        (f: any) =>
+          f.field && (Array.isArray(f.value) ? f.value.length : f.value)
+      )
       .map((f: any) => {
         const col = f.field || "";
         const prefixed =
           f.table && !col.includes(".") ? `${f.table}.${col}` : col;
-        return { ...f, column: prefixed };
-      });
+        const rawValues = Array.isArray(f.value) ? f.value : [f.value];
+        const values = rawValues
+          .map((v) => String(v))
+          .filter((v) => v.trim().length);
+        const op = normalizeOp(f.op || f.operator || "in");
+        return { ...f, column: prefixed, values, op };
+      })
+      .filter((f: any) => (f.values || []).length);
 
     const rowsAfterFilter = rows.filter((row) => {
       const primaryMatches = filterBy
@@ -451,9 +554,10 @@ const ChatWithDashboard = ({
       if (!activeFilters.length) return true;
 
       return activeFilters.every((f: any) =>
-        matchesSelection(
+        matchesFilterOp(
           f.column || f.field || "",
-          [f.value],
+          f.op,
+          f.values,
           valueFor(row, f.column || f.field || "")
         )
       );
@@ -506,7 +610,8 @@ const ChatWithDashboard = ({
         count,
       }));
 
-      return { columns: finalColumns, rows: rowsOut };
+      const displayColumns = finalColumns.map((c) => formatHeader(c));
+      return { columns: finalColumns, displayColumns, rows: rowsOut };
     }
 
     const rowsOut = rowsAfterFilter.slice(0, 50).map((row) => {
@@ -516,7 +621,8 @@ const ChatWithDashboard = ({
       });
       return out;
     });
-    return { columns, rows: rowsOut };
+    const displayColumns = columns.map((c) => formatHeader(c));
+    return { columns, displayColumns, rows: rowsOut };
   };
 
   const buildFilterQuery = (cfg: any) => {
@@ -524,8 +630,13 @@ const ChatWithDashboard = ({
     const filterValues: string[] = cfg.filter_values || [];
     const groupBy = cfg.group_by || "";
     const groupValues: string[] = cfg.group_by_values || [];
-    const filters: { table?: string; field?: string; value?: string }[] =
-      cfg.filters || [];
+    const filters: {
+      table?: string;
+      field?: string;
+      op?: string;
+      operator?: string;
+      value?: string | string[];
+    }[] = cfg.filters || [];
     const joinedTables: string[] = cfg.joined_tables || [];
     const normalize = (s: string) =>
       s.toLowerCase().replace(/[^a-z0-9]+/g, "_");
@@ -535,7 +646,6 @@ const ChatWithDashboard = ({
     const isDayRangeVals = filterValues.every(
       (v) => /^\d+\s*-\s*\d+$/.test(v) || /^\d+\+$/.test(v)
     );
-    // Derived buckets: don't send to backend when explicitly filtering on date bucket
     const skipServerFilter =
       filterBy &&
       filterValues.length &&
@@ -543,10 +653,11 @@ const ChatWithDashboard = ({
       (isQuarterVals || isDayRangeVals);
 
     const params = new URLSearchParams();
+    const joinSet = new Set((joinedTables || []).filter(Boolean));
+    const baseTable = cfg.dataset_id || "";
     let targetFilterBy = filterBy;
     let targetValues = filterValues;
 
-    // If no server-side filter is set but group_by is a date bucket with quarter selections, send a derived filter
     if (
       !filterBy &&
       groupBy &&
@@ -572,15 +683,31 @@ const ChatWithDashboard = ({
       params.set("filter_by", targetFilterBy);
       targetValues.forEach((v) => params.append("filter_values", v));
     }
+
     filters
-      .filter((f) => f.field && f.value)
+      .filter(
+        (f) => f.field && (Array.isArray(f.value) ? f.value.length : f.value)
+      )
       .forEach((f) => {
-        const col = f.field || "";
-        const prefixed =
-          f.table && !col.includes(".") ? `${f.table}.${col}` : col;
-        params.append("filters", `${prefixed}:${f.value}`);
+        const prefix = f.table ? `${f.table}.` : "";
+        if (f.table && f.table !== baseTable) {
+          joinSet.add(f.table);
+        }
+        const rawValues = Array.isArray(f.value) ? f.value : [f.value];
+        const values = rawValues
+          .map((v) => String(v))
+          .filter((v) => v.trim().length);
+        if (!values.length) return;
+        const op = (f.op || f.operator || "in").toLowerCase();
+        const payload = {
+          field: `${prefix}${f.field}`,
+          table: f.table,
+          op,
+          values,
+        };
+        params.append("filters", JSON.stringify(payload));
       });
-    joinedTables
+    Array.from(joinSet)
       .filter(Boolean)
       .forEach((t) => params.append("joined_tables", t));
     const qs = params.toString();
@@ -604,6 +731,7 @@ const ChatWithDashboard = ({
         widgetType?: string | null;
         config?: any;
         columns: string[];
+        displayColumns?: string[];
         rows: Record<string, unknown>[];
       }[] = [];
 
@@ -646,17 +774,18 @@ const ChatWithDashboard = ({
           const data = await res.json();
           const datasetCols: string[] = data?.columns || [];
           const rows: Record<string, unknown>[] = data?.rows || [];
-          const { columns, rows: builtRows } = buildPreviewTable(
-            cfg,
-            datasetCols,
-            rows
-          );
+          const {
+            columns,
+            displayColumns,
+            rows: builtRows,
+          } = buildPreviewTable(cfg, datasetCols, rows);
           results.push({
             widgetId: widget.id,
             title: widget.title,
             widgetType: widget.widget_type,
             config: cfg,
             columns,
+            displayColumns,
             rows: builtRows,
           });
         } catch (err) {
@@ -831,8 +960,8 @@ const ChatWithDashboard = ({
       )}
 
       <div className={layoutClass}>
-        <section className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-white p-5 shadow-lg dark:border-slate-700 dark:bg-gradient-to-br dark:from-slate-900 dark:via-slate-950 dark:to-slate-900">
-          <div className="mt-4 space-y-3">
+        <section className="flex min-h-[560px] flex-col rounded-2xl border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-white p-5 shadow-lg dark:border-slate-700 dark:bg-gradient-to-br dark:from-slate-900 dark:via-slate-950 dark:to-slate-900">
+          <div className="mt-4 flex flex-1 flex-col gap-3">
             <div
               className="flex flex-wrap items-center gap-1 border-b border-slate-200 pb-1 dark:border-slate-700"
               role="tablist"
@@ -921,24 +1050,76 @@ const ChatWithDashboard = ({
                 <button
                   type="button"
                   onClick={() => navigate("/customer-requirement")}
-                  className="inline-flex items-center rounded-lg border border-sky-600 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-700 shadow-sm hover:bg-sky-100 focus:outline-none focus:ring-2 focus:ring-sky-400 dark:border-sky-400 dark:bg-slate-900 dark:text-sky-200 dark:hover:bg-slate-800"
+                  className="inline-flex items-center gap-2 rounded-lg border border-sky-600 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-700 shadow-sm hover:bg-sky-100 focus:outline-none focus:ring-2 focus:ring-sky-400 dark:border-sky-400 dark:bg-slate-900 dark:text-sky-200 dark:hover:bg-slate-800"
                 >
-                  Received new Job Posting?
+                  <svg
+                    aria-hidden
+                    className="h-4 w-4"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      d="M12 4v16m8-8H4"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  New Job Posting
                 </button>
                 <button
                   type="button"
                   onClick={() => canOpenReport && setShowReportModal(true)}
                   disabled={!canOpenReport}
-                  className="inline-flex items-center rounded-lg border border-emerald-600 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-400 dark:border-emerald-400 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-slate-800"
+                  className="inline-flex items-center gap-2 rounded-lg border border-emerald-600 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-400 dark:border-emerald-400 dark:bg-slate-900 dark:text-emerald-200 dark:hover:bg-slate-800"
                 >
+                  <svg
+                    aria-hidden
+                    className="h-4 w-4"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      d="M7 17h3l8-8a1 1 0 0 0 0-1.4l-1.6-1.6a1 1 0 0 0-1.4 0l-8 8V17Zm0 0v3h3"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
                   Update Job Posting
                 </button>
                 <button
                   type="button"
                   onClick={() => setOpenDemandsOpen(true)}
-                  className="inline-flex items-center rounded-lg border border-indigo-600 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 shadow-sm hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:border-indigo-400 dark:bg-slate-900 dark:text-indigo-200 dark:hover:bg-slate-800"
+                  className="inline-flex items-center gap-2 rounded-lg border border-indigo-600 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 shadow-sm hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:border-indigo-400 dark:bg-slate-900 dark:text-indigo-200 dark:hover:bg-slate-800"
                 >
-                  Open Demands
+                  <svg
+                    aria-hidden
+                    className="h-4 w-4"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      d="M4 12c0-4.4 3.6-8 8-8s8 3.6 8 8-3.6 8-8 8c-1.8 0-3.5-.6-4.9-1.7"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M12 6v6l3 2"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  InProgress Onboarding
                 </button>
               </div>
             </div>
@@ -962,14 +1143,14 @@ const ChatWithDashboard = ({
                 {previewError}
               </p>
             )}
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid items-start gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {previewItems.map((item) => {
                 const isCollapsed = collapsedWidgetIds.includes(item.widgetId);
                 return (
                   <div
                     key={item.widgetId}
-                    className={`flex flex-col space-y-3 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-800 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${
-                      isCollapsed ? "h-[120px]" : "h-[420px]"
+                    className={`flex flex-col rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-800 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${
+                      isCollapsed ? "space-y-1" : "space-y-3 h-[420px]"
                     }`}
                   >
                     <div className="flex items-center justify-between gap-3">
@@ -985,6 +1166,7 @@ const ChatWithDashboard = ({
                             isCollapsed ? "Expand widget" : "Collapse widget"
                           }
                         >
+                          <span aria-hidden>{isCollapsed ? "▸" : "▾"}</span>{" "}
                           {isCollapsed ? "Expand" : "Collapse"}
                         </button>
                       </div>
@@ -1004,14 +1186,16 @@ const ChatWithDashboard = ({
                             <table className="min-w-full text-left text-xs">
                               <thead className="bg-slate-200 text-slate-900 dark:bg-slate-700 dark:text-slate-100">
                                 <tr>
-                                  {item.columns.map((c) => (
-                                    <th
-                                      key={c}
-                                      className="sticky top-0 z-10 whitespace-nowrap bg-slate-200/95 px-3 py-2 font-semibold backdrop-blur dark:bg-slate-700/95"
-                                    >
-                                      {c}
-                                    </th>
-                                  ))}
+                                  {(item.displayColumns || item.columns).map(
+                                    (c, idx) => (
+                                      <th
+                                        key={item.columns[idx] || c}
+                                        className="sticky top-0 z-10 whitespace-nowrap bg-slate-200/95 px-3 py-2 font-semibold backdrop-blur dark:bg-slate-700/95"
+                                      >
+                                        {c}
+                                      </th>
+                                    )
+                                  )}
                                 </tr>
                               </thead>
                               <tbody>
@@ -1056,27 +1240,7 @@ const ChatWithDashboard = ({
                 );
               })}
             </div>
-            <div className="pt-2 text-center">
-              <button
-                type="button"
-                onClick={() => canOpenReport && setShowReportModal(true)}
-                disabled={!canOpenReport}
-                className="inline-flex items-center gap-1 text-sm font-semibold underline-offset-4 disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline text-sky-600 hover:text-sky-700 hover:underline dark:text-sky-300 dark:hover:text-sky-200"
-              >
-                <span aria-hidden>+</span>
-                More Details
-              </button>
-              {reportLoading && (
-                <p className="pt-1 text-[11px] text-slate-500 dark:text-slate-400">
-                  Loading full data…
-                </p>
-              )}
-              {reportError && (
-                <p className="pt-1 text-[11px] text-rose-600 dark:text-rose-400">
-                  {reportError}
-                </p>
-              )}
-            </div>
+            <div className="pt-2" />
           </div>
         </section>
 
@@ -1084,6 +1248,50 @@ const ChatWithDashboard = ({
           <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-lg dark:border-slate-700 dark:bg-slate-900">
             <ChatWindow authToken={authToken} showSql={showSql} />
           </section>
+        )}
+      </div>
+
+      <div className="pt-1 text-center">
+        <button
+          type="button"
+          onClick={() => canOpenReport && setShowReportModal(true)}
+          disabled={!canOpenReport}
+          className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-sky-300 disabled:cursor-not-allowed disabled:bg-slate-400 dark:bg-sky-500 dark:text-slate-900 dark:hover:bg-sky-400"
+        >
+          <svg
+            aria-hidden
+            className="h-4 w-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M12 5c-5 0-8.5 4.5-9 6 .5 1.5 4 6 9 6s8.5-4.5 9-6c-.5-1.5-4-6-9-6Z"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <circle
+              cx="12"
+              cy="11"
+              r="2.5"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              fill="none"
+            />
+          </svg>
+          <span>View More Details</span>
+        </button>
+        {reportLoading && (
+          <p className="pt-1 text-[11px] text-slate-500 dark:text-slate-400">
+            Loading full data…
+          </p>
+        )}
+        {reportError && (
+          <p className="pt-1 text-[11px] text-rose-600 dark:text-rose-400">
+            {reportError}
+          </p>
         )}
       </div>
 

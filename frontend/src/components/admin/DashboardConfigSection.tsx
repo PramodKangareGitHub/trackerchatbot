@@ -19,6 +19,7 @@ import DashboardSelectorActions from "./DashboardManagement/DashboardSelectorAct
 import WidgetTypePicker from "./DashboardManagement/WidgetTypePicker";
 import PreviewTable from "./DashboardManagement/PreviewTable";
 import ResultTable from "../ResultTable";
+import { buildFixedDatasets, fixedDatasetIds } from "./fixedDatasets";
 
 type DashboardConfigSectionProps = {
   datasets: Dataset[];
@@ -57,7 +58,7 @@ type DashboardConfigSectionProps = {
   previewLoading: boolean;
   previewError: string | null;
   userRole: UserRole;
-  roleOptions: string[];
+  roleOptions: UserRole[];
   onSelectDataset: (datasetId: string) => void;
   onAddWidgetClick: () => void;
   confirmAddWidget: () => void;
@@ -81,6 +82,7 @@ type DashboardConfigSectionProps = {
   setGroupValueOptions: Dispatch<SetStateAction<Record<string, string[]>>>;
   setError: Dispatch<SetStateAction<string | null>>;
   loadPreviewData: (widget: Widget | undefined) => void | Promise<void>;
+  loadColumns: (datasetId: string) => Promise<string[]>;
 };
 
 const DashboardConfigSection = ({
@@ -131,6 +133,7 @@ const DashboardConfigSection = ({
   setGroupValueOptions,
   setError,
   loadPreviewData,
+  loadColumns,
 }: DashboardConfigSectionProps) => {
   const [newDashboardName, setNewDashboardName] = useState("");
   const [newDashboardDesc, setNewDashboardDesc] = useState("");
@@ -138,144 +141,9 @@ const DashboardConfigSection = ({
   const [editDashboardDesc, setEditDashboardDesc] = useState("");
   const [collapsedWidgetIds, setCollapsedWidgetIds] = useState<string[]>([]);
 
-  const fixedDatasetIds = useMemo(
-    () => [
-      "customer_requirements",
-      "hcl_demand",
-      "interviewed_candidate_details",
-      "hcl_onboarding_status",
-      "optum_onboarding_status",
-    ],
-    []
-  );
-
-  const fixedDatasetColumns = useMemo(
-    () => ({
-      customer_requirements: [
-        "unique_job_posting_id",
-        "portfolio",
-        "sub_portfolio",
-        "tower",
-        "customer_cio",
-        "customer_leader",
-        "customer_vice_president",
-        "customer_senior_director",
-        "customer_director",
-        "customer_hiring_manager",
-        "customer_band",
-        "hcl_leader",
-        "hcl_deliver_spoc",
-        "job_posting_id",
-        "location",
-        "sub_location",
-        "requirement_type",
-        "business_unit",
-        "customer_job_posting_date",
-        "number_of_positions",
-        "sell_rate",
-        "job_posting_status",
-        "job_role",
-        "skill_category",
-        "primary_skills",
-        "secondary_skills",
-        "created_at",
-        "updated_at",
-        "created_by",
-        "modified_by",
-      ],
-      hcl_demand: [
-        "demand_id",
-        "unique_job_posting_id",
-        "tag_spoc",
-        "tsc_spoc",
-        "demand_created_date",
-        "demand_status",
-        "demand_approved_date",
-        "tag_first_profile_sourced_date",
-        "tsc_first_profile_sourced_date",
-        "tp_profiles_requested",
-        "tp_vendor_name",
-        "tp_profiles_requested_date",
-        "tp_first_profile_sourced_date",
-        "created_at",
-        "modified_at",
-        "created_by",
-        "modified_by",
-      ],
-      interviewed_candidate_details: [
-        "candidate_name",
-        "unique_job_posting_id",
-        "demand_id",
-        "candidate_type",
-        "tp_vendor_name",
-        "candidate_contact",
-        "candidate_email",
-        "interview_status",
-        "initial_screening_status",
-        "initial_screening_rejected_reason",
-        "tp1_interview_status",
-        "tp1_rejected_reason",
-        "tp2_interview_status",
-        "tp2_skipped_rejected_reason",
-        "manager_interview_status",
-        "manager_skipped_rejected_reason",
-        "customer_interview_status",
-        "customer_interview_skipped_rejected_reason",
-        "candidate_selected_date",
-        "created_at",
-        "modified_at",
-        "created_by",
-        "modified_by",
-      ],
-      hcl_onboarding_status: [
-        "sap_id",
-        "unique_job_posting_id",
-        "demand_id",
-        "candidate_contact",
-        "candidate_email",
-        "hcl_onboarding_status",
-        "hire_loss_reason",
-        "onboarded_date",
-        "employee_name",
-        "employee_hcl_email",
-        "created_at",
-        "modified_at",
-        "created_by",
-        "modified_by",
-      ],
-      optum_onboarding_status: [
-        "customer_employee_id",
-        "unique_job_posting_id",
-        "sap_id",
-        "customer_onboarding_status",
-        "customer_onboarded_date",
-        "customer_employee_name",
-        "customer_email",
-        "customer_login_id",
-        "customer_lob",
-        "billing_start_date",
-        "customer_laptop_required",
-        "customer_laptop_status",
-        "customer_laptop_serial_no",
-        "created_at",
-        "modified_at",
-        "created_by",
-        "modified_by",
-      ],
-    }),
-    []
-  );
-
   const availableDatasets: Dataset[] = useMemo(
-    () =>
-      fixedDatasetIds.map((id) => ({
-        id,
-        original_file_name: `${id}.table`,
-        table_name: id,
-        row_count: 0,
-        columns: fixedDatasetColumns[id] || [],
-      })),
-    [fixedDatasetIds, fixedDatasetColumns]
+    () => buildFixedDatasets(datasets),
+    [datasets]
   );
 
   const datasetLookup = useMemo(() => {
@@ -286,10 +154,7 @@ const DashboardConfigSection = ({
     });
     availableDatasets.forEach((ds) => {
       if (!map.has(ds.id)) {
-        const real = datasets.find(
-          (d) => d.id === ds.id || d.table_name === ds.table_name
-        );
-        map.set(ds.id, real || ds);
+        map.set(ds.id, ds);
       }
     });
     return map;
@@ -299,6 +164,34 @@ const DashboardConfigSection = ({
     () => dashboards.find((d) => d.id === selectedDashboardId) || null,
     [dashboards, selectedDashboardId]
   );
+
+  const availableFilterTables = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...availableDatasets.map((ds) => ds.id),
+          ...datasets.map((ds) => ds.id),
+        ])
+      ),
+    [availableDatasets, datasets]
+  );
+
+  const safeFilterTables =
+    availableFilterTables.length > 0 ? availableFilterTables : [];
+  const defaultFilterTable = safeFilterTables[0] || "";
+
+  const operatorOptions = [
+    { value: "in", label: "In" },
+    { value: "not_in", label: "Not In" },
+    { value: "=", label: "Equals" },
+    { value: "!=", label: "Not Equals" },
+    { value: ">", label: "Greater Than" },
+    { value: ">=", label: "Greater Or Equal" },
+    { value: "<", label: "Less Than" },
+    { value: "<=", label: "Less Or Equal" },
+    { value: "between", label: "Between (2 values)" },
+    { value: "contains", label: "Contains" },
+  ];
 
   useEffect(() => {
     setEditDashboardName(selectedDashboard?.name || "");
@@ -325,6 +218,43 @@ const DashboardConfigSection = ({
       }),
     [widgets, getWidgetKey, getTableConfig, getChartConfig]
   );
+
+  useEffect(() => {
+    const toLoad = new Set<string>();
+    const consider = (id?: string) => {
+      if (id) toLoad.add(id);
+    };
+
+    widgetEntries.forEach(({ widget }) => {
+      const tableCfg = getTableConfig(widget);
+      const chartCfg = getChartConfig(widget);
+
+      consider(tableCfg.dataset_id);
+      (tableCfg.joined_tables || []).forEach(consider);
+      (tableCfg.filters || []).forEach((f) => consider(f.table));
+
+      consider(chartCfg.dataset_id);
+      (chartCfg.joined_tables || []).forEach(consider);
+      (chartCfg.filters || []).forEach((f) => consider(f.table));
+
+      const filterTable = chartCfg.filter_by?.includes(".")
+        ? chartCfg.filter_by.split(".")[0]
+        : chartCfg.dataset_id || chartCfg.joined_tables?.[0];
+      consider(filterTable);
+    });
+
+    toLoad.forEach((id) => {
+      const ds = datasetLookup.get(id);
+      if (!ds || (ds.columns || []).length) return;
+      loadColumns(id);
+    });
+  }, [
+    widgetEntries,
+    datasetLookup,
+    loadColumns,
+    getTableConfig,
+    getChartConfig,
+  ]);
 
   useEffect(() => {
     const allKeys = widgetEntries.map((w) => w.widgetKey);
@@ -370,6 +300,133 @@ const DashboardConfigSection = ({
       setPreviewWidgetId(scopedWidgets[0].widgetKey);
     }
   }, [scopedWidgets, previewWidgetId, setPreviewWidgetId, setShowPreview]);
+
+  // Preload filter value options for existing filters when editing widgets so the chip lists
+  // show available values instead of only the already-selected ones.
+  useEffect(() => {
+    widgetEntries.forEach(({ widget, widgetKey }) => {
+      const tableFilterKey = filterOptionsKey(widgetKey, "table");
+      const chartFilterKey = filterOptionsKey(widgetKey, "chart");
+      const tableConfig = getTableConfig(widget);
+      const chartConfig = getChartConfig(widget);
+
+      const tableFilters = tableConfig.filters || [];
+      tableFilters.forEach((flt, idx) => {
+        const filterKey = `${tableFilterKey}-f${idx}`;
+        const cacheKey = groupOptionsKey(filterKey, "table");
+        const tableId = flt.table || defaultFilterTable;
+        const columnOnly = flt.field?.includes(".")
+          ? flt.field.split(".").slice(-1)[0]
+          : flt.field;
+        const hasCache = (groupValueOptions[cacheKey] || []).length > 0;
+        const isLoading = groupValueLoading[cacheKey];
+        if (!tableId || !columnOnly || hasCache || isLoading) return;
+        fetchGroupByValues(filterKey, "table", tableId, columnOnly, (values) =>
+          setGroupValueOptions((prev) => ({
+            ...prev,
+            [filterKey]: values,
+            [cacheKey]: values,
+          }))
+        ).catch(() =>
+          setGroupValueOptions((prev) => ({
+            ...prev,
+            [filterKey]: [],
+            [cacheKey]: [],
+          }))
+        );
+      });
+
+      const chartFilters = chartConfig.filters || [];
+      chartFilters.forEach((flt, idx) => {
+        const filterKey = `${chartFilterKey}-f${idx}`;
+        const cacheKey = groupOptionsKey(filterKey, "chart");
+        const tableId = flt.table || defaultFilterTable;
+        const columnOnly = flt.field?.includes(".")
+          ? flt.field.split(".").slice(-1)[0]
+          : flt.field;
+        const hasCache = (groupValueOptions[cacheKey] || []).length > 0;
+        const isLoading = groupValueLoading[cacheKey];
+        if (!tableId || !columnOnly || hasCache || isLoading) return;
+        fetchGroupByValues(filterKey, "chart", tableId, columnOnly, (values) =>
+          setGroupValueOptions((prev) => ({
+            ...prev,
+            [filterKey]: values,
+            [cacheKey]: values,
+          }))
+        ).catch(() =>
+          setGroupValueOptions((prev) => ({
+            ...prev,
+            [filterKey]: [],
+            [cacheKey]: [],
+          }))
+        );
+      });
+    });
+  }, [
+    widgetEntries,
+    filterOptionsKey,
+    groupOptionsKey,
+    defaultFilterTable,
+    getTableConfig,
+    getChartConfig,
+    groupValueOptions,
+    groupValueLoading,
+    fetchGroupByValues,
+    setGroupValueOptions,
+  ]);
+
+  // Preload quick filter values when a widget already has filter_by set so the chips show options.
+  useEffect(() => {
+    widgetEntries.forEach(({ widget, widgetKey, widgetType }) => {
+      const cfg =
+        widgetType === "table"
+          ? getTableConfig(widget)
+          : getChartConfig(widget);
+      const filterBy = cfg.filter_by;
+      if (!filterBy) return;
+
+      const optionsKey = filterOptionsKey(widgetKey, widgetType);
+      const fetchKey = `${widgetKey}-filter`;
+      const hasCache = (groupValueOptions[optionsKey] || []).length > 0;
+      const isLoading = groupValueLoading[optionsKey];
+      if (hasCache || isLoading) return;
+
+      const columnOnly = filterBy.includes(".")
+        ? filterBy.split(".").slice(-1)[0]
+        : filterBy;
+      const datasetForColumn = filterBy.includes(".")
+        ? filterBy.split(".")[0]
+        : cfg.dataset_id || cfg.joined_tables?.[0] || defaultFilterTable;
+      if (!datasetForColumn || !columnOnly) return;
+
+      fetchGroupByValues(
+        fetchKey,
+        widgetType,
+        datasetForColumn,
+        columnOnly,
+        (values) =>
+          setGroupValueOptions((prev) => ({
+            ...prev,
+            [optionsKey]: values,
+          }))
+      ).catch(() =>
+        setGroupValueOptions((prev) => ({
+          ...prev,
+          [optionsKey]: [],
+        }))
+      );
+    });
+  }, [
+    widgetEntries,
+    filterOptionsKey,
+    getTableConfig,
+    getChartConfig,
+    fetchGroupByValues,
+    groupValueOptions,
+    groupValueLoading,
+    setGroupValueOptions,
+    defaultFilterTable,
+  ]);
 
   const previewWidget = widgetEntries.find(
     (entry) => entry.widgetKey === previewWidgetId
@@ -532,16 +589,14 @@ const DashboardConfigSection = ({
                 )
               );
 
-              const tableFieldOptions = Array.from(
-                new Set([
-                  ...(joinedColumns.length
-                    ? joinedColumns
-                    : (tableDataset?.columns || []).map((c) =>
-                        primaryTableId ? `${primaryTableId}.${c}` : c
-                      )),
-                  ...(tableConfig.fields || []),
-                ])
+              const primaryTableColumns = (tableDataset?.columns || []).map(
+                (c) => (primaryTableId ? `${primaryTableId}.${c}` : c)
               );
+
+              const tableFieldOptions = primaryTableColumns;
+
+              const displayFieldName = (col: string) =>
+                col.includes(".") ? col.split(".").slice(-1)[0] : col;
 
               const chartFieldOptions = Array.from(
                 new Set([
@@ -590,15 +645,6 @@ const DashboardConfigSection = ({
               const tableColumnsFor = (tableId: string) =>
                 datasetLookup.get(tableId)?.columns || [];
 
-              // Filters are independent of the field-picker table selection.
-              // Use both fixed tables and backend datasets so Add Filter is always usable.
-              const availableFilterTables = Array.from(
-                new Set([
-                  ...availableDatasets.map((ds) => ds.id),
-                  ...datasets.map((ds) => ds.id),
-                ])
-              );
-
               const makeTableFilterKey = (index: number) =>
                 `${tableFilterKey}-f${index}`;
 
@@ -619,9 +665,6 @@ const DashboardConfigSection = ({
                 });
               };
 
-              const safeFilterTables =
-                availableFilterTables.length > 0 ? availableFilterTables : [];
-              const defaultFilterTable = safeFilterTables[0] || "";
               const currentTableFilters = tableConfig.filters || [];
               const currentChartFilters = chartConfig.filters || [];
 
@@ -660,6 +703,9 @@ const DashboardConfigSection = ({
                 updateChartConfig({ filters: nextFilters });
               };
 
+              const getOp = (flt: { op?: string; operator?: string }) =>
+                flt.op || (flt as any).operator || "in";
+
               const addTableFilter = () => {
                 const fallbackTable = defaultFilterTable || safeFilterTables[0];
                 if (!fallbackTable) return;
@@ -677,7 +723,7 @@ const DashboardConfigSection = ({
 
                 const nextFilters = [
                   ...currentTableFilters,
-                  { table: fallbackTable, field: "", value: "" },
+                  { table: fallbackTable, field: "", op: "in", value: "" },
                 ];
                 const newKey = makeTableFilterKey(nextFilters.length - 1);
                 clearFilterOptionsCache(newKey, "table");
@@ -700,7 +746,7 @@ const DashboardConfigSection = ({
 
                 const nextFilters = [
                   ...currentChartFilters,
-                  { table: fallbackTable, field: "", value: "" },
+                  { table: fallbackTable, field: "", op: "in", value: [] },
                 ];
                 const newKey = makeChartFilterKey(nextFilters.length - 1);
                 clearFilterOptionsCache(newKey, "chart");
@@ -710,7 +756,9 @@ const DashboardConfigSection = ({
               const updateFilterTable = (index: number, tableId: string) => {
                 const targetTable = tableId || defaultFilterTable;
                 const nextFilters = (tableConfig.filters || []).map((f, i) =>
-                  i === index ? { table: targetTable, field: "", value: "" } : f
+                  i === index
+                    ? { table: targetTable, field: "", op: getOp(f), value: "" }
+                    : f
                 );
                 const key = makeTableFilterKey(index);
                 clearFilterOptionsCache(key, "table");
@@ -723,10 +771,26 @@ const DashboardConfigSection = ({
               ) => {
                 const targetTable = tableId || defaultFilterTable;
                 const nextFilters = (chartConfig.filters || []).map((f, i) =>
-                  i === index ? { table: targetTable, field: "", value: "" } : f
+                  i === index
+                    ? { table: targetTable, field: "", op: getOp(f), value: [] }
+                    : f
                 );
                 const key = makeChartFilterKey(index);
                 clearFilterOptionsCache(key, "chart");
+                syncChartFilters(nextFilters);
+              };
+
+              const updateFilterOperator = (index: number, op: string) => {
+                const nextFilters = (tableConfig.filters || []).map((f, i) =>
+                  i === index ? { ...f, op } : f
+                );
+                syncTableFilters(nextFilters);
+              };
+
+              const updateChartFilterOperator = (index: number, op: string) => {
+                const nextFilters = (chartConfig.filters || []).map((f, i) =>
+                  i === index ? { ...f, op } : f
+                );
                 syncChartFilters(nextFilters);
               };
 
@@ -740,7 +804,9 @@ const DashboardConfigSection = ({
                   ? field.split(".").slice(-1)[0]
                   : field;
                 const nextFilters = (tableConfig.filters || []).map((f, i) =>
-                  i === index ? { table: tableId, field, value: "" } : f
+                  i === index
+                    ? { table: tableId, field, op: getOp(f), value: "" }
+                    : f
                 );
                 clearFilterOptionsCache(filterKey, "table");
                 syncTableFilters(nextFilters);
@@ -755,12 +821,14 @@ const DashboardConfigSection = ({
                       setGroupValueOptions((prev) => ({
                         ...prev,
                         [filterKey]: values,
+                        [groupOptionsKey(filterKey, "table")]: values,
                       }))
                   ).catch(() => {
                     // If the backend responds 404 (dataset missing), keep the UI usable.
                     setGroupValueOptions((prev) => ({
                       ...prev,
                       [filterKey]: [],
+                      [groupOptionsKey(filterKey, "table")]: [],
                     }));
                   });
                 }
@@ -776,7 +844,9 @@ const DashboardConfigSection = ({
                   ? field.split(".").slice(-1)[0]
                   : field;
                 const nextFilters = (chartConfig.filters || []).map((f, i) =>
-                  i === index ? { table: tableId, field, value: "" } : f
+                  i === index
+                    ? { table: tableId, field, op: getOp(f), value: [] }
+                    : f
                 );
                 clearFilterOptionsCache(filterKey, "chart");
                 syncChartFilters(nextFilters);
@@ -791,11 +861,13 @@ const DashboardConfigSection = ({
                       setGroupValueOptions((prev) => ({
                         ...prev,
                         [filterKey]: values,
+                        [groupOptionsKey(filterKey, "chart")]: values,
                       }))
                   ).catch(() => {
                     setGroupValueOptions((prev) => ({
                       ...prev,
                       [filterKey]: [],
+                      [groupOptionsKey(filterKey, "chart")]: [],
                     }));
                   });
                 }
@@ -804,11 +876,18 @@ const DashboardConfigSection = ({
               const updateFilterValue = (
                 index: number,
                 tableId: string,
-                value: string
+                values: string | string[]
               ) => {
                 const nextFilters = (tableConfig.filters || []).map((f, i) =>
                   i === index
-                    ? { table: tableId, field: f.field || "", value }
+                    ? {
+                        table: tableId,
+                        field: f.field || "",
+                        op: getOp(f),
+                        value: Array.isArray(values)
+                          ? values
+                          : [values].filter(Boolean),
+                      }
                     : f
                 );
                 syncTableFilters(nextFilters);
@@ -817,11 +896,18 @@ const DashboardConfigSection = ({
               const updateChartFilterValue = (
                 index: number,
                 tableId: string,
-                value: string
+                values: string | string[]
               ) => {
                 const nextFilters = (chartConfig.filters || []).map((f, i) =>
                   i === index
-                    ? { table: tableId, field: f.field || "", value }
+                    ? {
+                        table: tableId,
+                        field: f.field || "",
+                        op: getOp(f),
+                        value: Array.isArray(values)
+                          ? values
+                          : [values].filter(Boolean),
+                      }
                     : f
                 );
                 syncChartFilters(nextFilters);
@@ -904,7 +990,7 @@ const DashboardConfigSection = ({
                         <div className="flex flex-wrap items-center gap-2 text-xs">
                           {(roleOptions.length ? roleOptions : []).map(
                             (role) => {
-                              const checked = (w.roles || []).includes(role);
+                              const checked = (w.roles || []).includes(role as UserRole);
                               return (
                                 <label
                                   key={role}
@@ -923,9 +1009,9 @@ const DashboardConfigSection = ({
                                         ? current.filter((r) => r !== role)
                                         : [...current, role];
                                       updateWidget(idx, {
-                                        roles: next.length
+                                        roles: (next.length
                                           ? next
-                                          : roleOptions.slice(0, 1),
+                                          : roleOptions.slice(0, 1)) as UserRole[],
                                       });
                                     }}
                                     disabled={!isEditing}
@@ -1096,7 +1182,7 @@ const DashboardConfigSection = ({
                                             : ""
                                         }
                                       >
-                                        {col}
+                                        {displayFieldName(col)}
                                       </option>
                                     ))}
                                   </select>
@@ -1124,7 +1210,7 @@ const DashboardConfigSection = ({
                                             className="flex items-center justify-between gap-2 rounded border border-slate-200 bg-slate-50 px-2 py-1 dark:border-slate-700 dark:bg-slate-800"
                                           >
                                             <span className="truncate">
-                                              {field}
+                                              {displayFieldName(field)}
                                             </span>
                                             <button
                                               type="button"
@@ -1192,7 +1278,11 @@ const DashboardConfigSection = ({
                               const valueOptions = Array.from(
                                 new Set([
                                   ...(groupValueOptions[cacheKey] || []),
-                                  ...(flt.value ? [flt.value] : []),
+                                  ...(Array.isArray(flt.value)
+                                    ? flt.value
+                                    : flt.value
+                                      ? [flt.value]
+                                      : []),
                                 ])
                               );
                               const isLoadingFilter =
@@ -1201,7 +1291,7 @@ const DashboardConfigSection = ({
                               return (
                                 <div
                                   key={`${idx}-${flt.field}-${flt.table || ""}`}
-                                  className="grid w-full gap-2 rounded-lg border border-slate-200 bg-white px-2 py-2 shadow-sm sm:grid-cols-4 dark:border-slate-700 dark:bg-slate-900"
+                                  className="grid w-full gap-2 rounded-lg border border-slate-200 bg-white px-2 py-2 shadow-sm sm:grid-cols-5 dark:border-slate-700 dark:bg-slate-900"
                                 >
                                   <div className="space-y-1">
                                     <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
@@ -1254,31 +1344,89 @@ const DashboardConfigSection = ({
 
                                   <div className="space-y-1">
                                     <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
-                                      Value
+                                      Operator
                                     </span>
                                     <select
-                                      value={flt.value || ""}
+                                      value={
+                                        flt.op || (flt as any).operator || "in"
+                                      }
                                       onChange={(e) =>
-                                        updateFilterValue(
+                                        updateFilterOperator(
                                           idx,
-                                          selectedTable,
                                           e.target.value
                                         )
                                       }
-                                      disabled={!selectedTable || !flt.field}
                                       className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                                     >
-                                      <option value="">
-                                        {isLoadingFilter
-                                          ? "Loading values..."
-                                          : "Select value"}
-                                      </option>
-                                      {valueOptions.map((val) => (
-                                        <option key={val} value={val}>
-                                          {val}
+                                      {operatorOptions.map((opt) => (
+                                        <option
+                                          key={opt.value}
+                                          value={opt.value}
+                                        >
+                                          {opt.label}
                                         </option>
                                       ))}
                                     </select>
+                                  </div>
+
+                                  <div className="space-y-1">
+                                    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                                      Values
+                                    </span>
+                                    <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs shadow-sm dark:border-slate-700 dark:bg-slate-900">
+                                      {isLoadingFilter && (
+                                        <span className="text-slate-500 dark:text-slate-400">
+                                          Loading...
+                                        </span>
+                                      )}
+                                      {!isLoadingFilter &&
+                                        !valueOptions.length && (
+                                          <span className="text-slate-500 dark:text-slate-400">
+                                            No values
+                                          </span>
+                                        )}
+                                      {valueOptions.map((val) => {
+                                        const checked = Array.isArray(flt.value)
+                                          ? flt.value.includes(val)
+                                          : false;
+                                        return (
+                                          <label
+                                            key={val}
+                                            className={`flex items-center gap-1 rounded-full border px-2 py-1 shadow-sm transition ${
+                                              checked
+                                                ? "border-sky-500 bg-sky-50 text-sky-700 dark:border-sky-400 dark:bg-sky-900/30 dark:text-sky-100"
+                                                : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                            }`}
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              checked={checked}
+                                              disabled={
+                                                !selectedTable || !flt.field
+                                              }
+                                              onChange={(e) => {
+                                                const current = Array.isArray(
+                                                  flt.value
+                                                )
+                                                  ? flt.value
+                                                  : [];
+                                                const next = e.target.checked
+                                                  ? [...current, val]
+                                                  : current.filter(
+                                                      (v) => v !== val
+                                                    );
+                                                updateFilterValue(
+                                                  idx,
+                                                  selectedTable,
+                                                  next
+                                                );
+                                              }}
+                                            />
+                                            {val}
+                                          </label>
+                                        );
+                                      })}
+                                    </div>
                                   </div>
 
                                   <div className="flex items-end justify-end">
@@ -1491,10 +1639,21 @@ const DashboardConfigSection = ({
                                     flt.table || defaultFilterTable;
                                   const tableColumns =
                                     tableColumnsFor(selectedTable);
+                                  const selectedValues = Array.isArray(
+                                    flt.value
+                                  )
+                                    ? flt.value
+                                    : flt.value
+                                      ? [flt.value]
+                                      : [];
                                   const valueOptions = Array.from(
                                     new Set([
                                       ...(groupValueOptions[cacheKey] || []),
-                                      ...(flt.value ? [flt.value] : []),
+                                      ...(Array.isArray(flt.value)
+                                        ? flt.value
+                                        : flt.value
+                                          ? [flt.value]
+                                          : []),
                                     ])
                                   );
                                   const isLoadingFilter =
@@ -1503,7 +1662,7 @@ const DashboardConfigSection = ({
                                   return (
                                     <div
                                       key={`${idx}-${flt.field}-${flt.table || ""}`}
-                                      className="grid w-full gap-2 rounded-lg border border-slate-200 bg-white px-2 py-2 shadow-sm sm:grid-cols-4 dark:border-slate-700 dark:bg-slate-900"
+                                      className="grid w-full gap-2 rounded-lg border border-slate-200 bg-white px-2 py-2 shadow-sm sm:grid-cols-5 dark:border-slate-700 dark:bg-slate-900"
                                     >
                                       <div className="space-y-1">
                                         <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
@@ -1559,33 +1718,88 @@ const DashboardConfigSection = ({
 
                                       <div className="space-y-1">
                                         <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
-                                          Value
+                                          Operator
                                         </span>
                                         <select
-                                          value={flt.value || ""}
+                                          value={
+                                            flt.op ||
+                                            (flt as any).operator ||
+                                            "in"
+                                          }
                                           onChange={(e) =>
-                                            updateChartFilterValue(
+                                            updateChartFilterOperator(
                                               idx,
-                                              selectedTable,
                                               e.target.value
                                             )
                                           }
-                                          disabled={
-                                            !selectedTable || !flt.field
-                                          }
                                           className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                                         >
-                                          <option value="">
-                                            {isLoadingFilter
-                                              ? "Loading values..."
-                                              : "Select value"}
-                                          </option>
-                                          {valueOptions.map((val) => (
-                                            <option key={val} value={val}>
-                                              {val}
+                                          {operatorOptions.map((opt) => (
+                                            <option
+                                              key={opt.value}
+                                              value={opt.value}
+                                            >
+                                              {opt.label}
                                             </option>
                                           ))}
                                         </select>
+                                      </div>
+
+                                      <div className="space-y-1">
+                                        <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                                          Values
+                                        </span>
+                                        <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs shadow-sm dark:border-slate-700 dark:bg-slate-900">
+                                          {isLoadingFilter && (
+                                            <span className="text-slate-500 dark:text-slate-400">
+                                              Loading...
+                                            </span>
+                                          )}
+                                          {!isLoadingFilter &&
+                                            !valueOptions.length && (
+                                              <span className="text-slate-500 dark:text-slate-400">
+                                                No values
+                                              </span>
+                                            )}
+                                          {valueOptions.map((val) => {
+                                            const checked =
+                                              selectedValues.includes(val);
+                                            return (
+                                              <label
+                                                key={val}
+                                                className={`flex items-center gap-1 rounded-full border px-2 py-1 shadow-sm transition ${
+                                                  checked
+                                                    ? "border-sky-500 bg-sky-50 text-sky-700 dark:border-sky-400 dark:bg-sky-900/30 dark:text-sky-100"
+                                                    : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                                }`}
+                                              >
+                                                <input
+                                                  type="checkbox"
+                                                  checked={checked}
+                                                  disabled={
+                                                    !selectedTable || !flt.field
+                                                  }
+                                                  onChange={(e) => {
+                                                    const current =
+                                                      selectedValues;
+                                                    const next = e.target
+                                                      .checked
+                                                      ? [...current, val]
+                                                      : current.filter(
+                                                          (v) => v !== val
+                                                        );
+                                                    updateChartFilterValue(
+                                                      idx,
+                                                      selectedTable,
+                                                      next
+                                                    );
+                                                  }}
+                                                />
+                                                {val}
+                                              </label>
+                                            );
+                                          })}
+                                        </div>
                                       </div>
 
                                       <div className="flex items-end justify-end">

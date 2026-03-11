@@ -13,6 +13,7 @@ import {
   formatDatasetName,
   readStoredBannerConfigs,
 } from "./bannerUtils";
+import { buildFixedDatasets } from "../admin/fixedDatasets";
 
 type BannerProps = {
   authToken?: string | null;
@@ -143,14 +144,7 @@ const Banner: React.FC<BannerProps> = ({
       }
 
       const headers = { Authorization: `Bearer ${authToken}` };
-      const datasetsRes = await fetch(`${apiBase}/api/datasets`, { headers });
-      if (!datasetsRes.ok) {
-        const body = await datasetsRes.json().catch(() => ({}));
-        throw new Error(
-          body.detail || datasetsRes.statusText || "Failed to load datasets"
-        );
-      }
-      const datasets: DatasetMeta[] = await datasetsRes.json();
+      const datasets: DatasetMeta[] = buildFixedDatasets([]);
       const datasetMap = new Map(datasets.map((d) => [d.id, d] as const));
 
       const dashboardsRes = await fetch(`${apiBase}/api/admin/dashboards`, {
@@ -178,31 +172,19 @@ const Banner: React.FC<BannerProps> = ({
         const ds = datasetMap.get(cfg.dataset_id);
         const datasetName = ds
           ? formatDatasetName(ds.original_file_name || ds.table_name || "")
-          : cfg.dataset_id;
-
-        const dash = cfg.dashboard_id
-          ? dashboardMap.get(cfg.dashboard_id)
-          : undefined;
-        const dashboardName = dash?.name || "Unassigned";
-
-        if (!ds) {
-          results.push({
-            config: cfg,
-            datasetName,
-            counts: [],
-            error: "Dataset not found",
-          });
-          continue;
-        }
+          : formatDatasetName(cfg.dataset_id);
 
         try {
-          let counts = await fetchValueCounts({
+          const { counts: countsIn, total } = await fetchValueCounts({
             apiBase,
             authToken,
             datasetId: cfg.dataset_id,
             column: cfg.column,
-            allowedValues: cfg.values,
+            filterOp: cfg.op || cfg.operator,
+            filterValues: cfg.values,
+            filters: cfg.filters,
           });
+          let counts = [...countsIn];
 
           // If specific values are configured, ensure they appear even when absent in data.
           if (cfg.values && cfg.values.length) {
@@ -233,7 +215,25 @@ const Banner: React.FC<BannerProps> = ({
             return a.value.localeCompare(b.value);
           });
 
-          counts.forEach((item) => {
+          const selectedValues = (cfg.values || []).map((v) => v.trim());
+          const selectedSet = new Set(selectedValues.filter(Boolean));
+          const aggregatedCount = selectedSet.size
+            ? counts.reduce(
+                (sum, entry) =>
+                  selectedSet.has(entry.value) ? sum + entry.count : sum,
+                0
+              )
+            : total;
+
+          const combinedValue = selectedSet.size
+            ? Array.from(selectedSet).join(" OR ")
+            : "All";
+
+          const combinedCounts: BannerValueCount[] = [
+            { value: combinedValue, count: aggregatedCount },
+          ];
+
+          combinedCounts.forEach((item) => {
             const key = `${cfg.id}::${item.value}`;
             nextCounts.set(key, item.count);
             const prev = prevCountsRef.current.get(key);
@@ -245,7 +245,7 @@ const Banner: React.FC<BannerProps> = ({
           results.push({
             config: { ...cfg, dashboard_id: cfg.dashboard_id },
             datasetName,
-            counts,
+            counts: combinedCounts,
           });
         } catch (err) {
           results.push({

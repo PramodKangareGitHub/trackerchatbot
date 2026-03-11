@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.hcl_demand import HclDemand
+from app.models.interviewed_candidate_details import InterviewedCandidateDetails
+from app.models.hcl_onboarding_status import HclOnboardingStatus
+from app.models.customer_requirement import CustomerRequirement
 
 router = APIRouter(prefix="/api/hcl-demand", tags=["hcl-demand"])
 
@@ -81,33 +84,65 @@ def get_hcl_demand(
     return _serialize(row)
 
 
-@router.put("/{demand_id}")
+@router.put("/{unique_job_posting_id}")
 def upsert_hcl_demand(
-    demand_id: str, payload: HclDemandIn, db: Session = Depends(get_db)
+    unique_job_posting_id: str, payload: HclDemandIn, db: Session = Depends(get_db)
 ) -> dict:
-    if not payload.unique_job_posting_id:
+    target_uid = payload.unique_job_posting_id or unique_job_posting_id
+    if not target_uid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="unique_job_posting_id is required"
         )
 
-    if payload.demand_id and payload.demand_id != demand_id:
+    # Keep path and payload in sync to avoid accidental cross-updates
+    if payload.unique_job_posting_id and payload.unique_job_posting_id != unique_job_posting_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="demand_id in path and payload must match",
+            detail="unique_job_posting_id in path and payload must match",
         )
 
-    existing = db.query(HclDemand).filter(HclDemand.demand_id == demand_id).first()
     now = datetime.utcnow()
 
-    if existing:
-        if existing.unique_job_posting_id != payload.unique_job_posting_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="unique_job_posting_id mismatch for this demand id",
-            )
+    # Ensure parent customer requirement exists to avoid FK failures
+    parent = (
+        db.query(CustomerRequirement)
+        .filter(CustomerRequirement.unique_job_posting_id == target_uid)
+        .first()
+    )
+    if not parent:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="unique_job_posting_id not found in customer_requirements",
+        )
 
+    # Find by unique_job_posting_id (the primary key)
+    existing = db.query(HclDemand).filter(HclDemand.unique_job_posting_id == target_uid).first()
+
+    if existing:
         data = payload.dict(exclude_unset=True)
-        data.pop("demand_id", None)
+        data["unique_job_posting_id"] = target_uid
+
+        new_demand_id = payload.demand_id or existing.demand_id
+        if new_demand_id != existing.demand_id:
+          # Changing demand_id with child rows will violate FK (no ON UPDATE CASCADE); block if linked rows exist
+          child_count = (
+              db.query(InterviewedCandidateDetails)
+              .filter(InterviewedCandidateDetails.demand_id == existing.demand_id)
+              .count()
+          ) + (
+              db.query(HclOnboardingStatus)
+              .filter(HclOnboardingStatus.demand_id == existing.demand_id)
+              .count()
+          )
+          if child_count:
+              raise HTTPException(
+                  status_code=status.HTTP_400_BAD_REQUEST,
+                  detail=(
+                      "Cannot change demand_id because related interviewed candidates/onboarding rows exist. "
+                      "Update or delete child rows first."
+                  ),
+              )
+        data["demand_id"] = new_demand_id
         data["modified_at"] = now
         data["modified_by"] = payload.modified_by or existing.modified_by or "system"
         for key, value in data.items():
@@ -118,14 +153,19 @@ def upsert_hcl_demand(
             db.refresh(existing)
         except IntegrityError as exc:  # surface FK/PK errors clearly
             db.rollback()
+            err = str(getattr(exc, "orig", exc))
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Integrity error while updating demand (check unique_job_posting_id and primary key)",
+                detail=(
+                    "Integrity error while updating demand (if demand_id still has a unique index, "
+                    "run migration 20260309_0010_allow_duplicate_demand_id). DB: " + err
+                ),
             ) from exc
         return {"operation": "updated", "record": _serialize(existing)}
 
     data = payload.dict(exclude_unset=True)
-    data["demand_id"] = demand_id
+    data.setdefault("unique_job_posting_id", target_uid)
+    data.setdefault("demand_id", payload.demand_id)
     data.setdefault("created_at", now)
     data.setdefault("modified_at", now)
     data.setdefault("created_by", payload.created_by or "system")
@@ -135,10 +175,15 @@ def upsert_hcl_demand(
         db.add(demand)
         db.commit()
         db.refresh(demand)
-    except IntegrityError as exc:  # likely FK mismatch or duplicate id
+    except IntegrityError as exc:  # likely FK mismatch or duplicate PK
         db.rollback()
+        err = str(getattr(exc, "orig", exc))
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Integrity error while inserting demand (check demand_id uniqueness and matching unique_job_posting_id)",
+            detail=(
+                "Integrity error while inserting demand (ensure unique_job_posting_id exists "
+                "in customer_requirements and this posting does not already have a demand). DB: "
+                + err
+            ),
         ) from exc
     return {"operation": "inserted", "record": _serialize(demand)}

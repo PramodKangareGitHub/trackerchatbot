@@ -68,6 +68,37 @@ class CustomerRequirementIn(BaseModel):
     modified_by: Optional[str] = None
 
 
+class CustomerRequirementUpdate(BaseModel):
+    unique_job_posting_id: Optional[str] = None
+    portfolio: Optional[str] = None
+    sub_portfolio: Optional[str] = None
+    tower: Optional[str] = None
+    customer_cio: Optional[str] = None
+    customer_leader: Optional[str] = None
+    customer_vice_president: Optional[str] = None
+    customer_senior_director: Optional[str] = None
+    customer_director: Optional[str] = None
+    customer_hiring_manager: Optional[str] = None
+    customer_band: Optional[str] = None
+    hcl_leader: Optional[str] = None
+    hcl_deliver_spoc: Optional[str] = None
+    job_posting_id: Optional[str] = None
+    location: Optional[str] = None
+    sub_location: Optional[str] = None
+    requirement_type: Optional[str] = None
+    business_unit: Optional[str] = None
+    customer_job_posting_date: Optional[datetime] = None
+    number_of_positions: Optional[int] = None
+    sell_rate: Optional[float] = None
+    job_posting_status: Optional[str] = None
+    job_role: Optional[str] = None
+    skill_category: Optional[str] = None
+    primary_skills: Optional[str] = None
+    secondary_skills: Optional[str] = None
+    created_by: Optional[str] = None
+    modified_by: Optional[str] = None
+
+
 def _serialize_requirement(row: CustomerRequirement) -> dict:
     # Convert ORM row to plain dict with ISO timestamps
     columns = [
@@ -143,7 +174,7 @@ def create_customer_requirements(
 @router.put("/{unique_job_posting_id}")
 def update_customer_requirement(
     unique_job_posting_id: str,
-    payload: CustomerRequirementIn,
+    payload: CustomerRequirementUpdate,
     db: Session = Depends(get_db),
 ) -> dict:
     row = (

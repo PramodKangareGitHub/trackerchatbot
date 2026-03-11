@@ -25,6 +25,14 @@ const inputClasses =
 
 const HclDemand: React.FC<HclDemandProps> = ({ value, onChange }) => {
   const tpRequestedYes = value.tp_profiles_requested === "Yes";
+  const tagSpocOptions = ["Drashti", "Neha", "Radhika"];
+  const tscSpocOptions = ["Keerthana"];
+  const demandStatusOptions = [
+    "New",
+    "Pending approval for L4",
+    "Pending approval from WPC SPOC",
+    "Moved to TAG",
+  ];
   const vendorOptions = [
     "Devlabs",
     "Adenai",
@@ -37,10 +45,23 @@ const HclDemand: React.FC<HclDemandProps> = ({ value, onChange }) => {
         .map((v) => v.trim())
         .filter(Boolean)
     : [];
+  const filteredTagSpocs = tagSpocOptions.filter((opt) =>
+    opt.toLowerCase().includes((value.tag_spoc || "").toLowerCase())
+  );
+  const filteredTscSpocs = tscSpocOptions.filter((opt) =>
+    opt.toLowerCase().includes((value.tsc_spoc || "").toLowerCase())
+  );
+  const filteredDemandStatuses = demandStatusOptions.filter((opt) =>
+    opt.toLowerCase().includes((value.demand_status || "").toLowerCase())
+  );
   const [showVendorPicker, setShowVendorPicker] = useState(false);
+  const [showTagSpocSuggestions, setShowTagSpocSuggestions] = useState(false);
+  const [showTscSpocSuggestions, setShowTscSpocSuggestions] = useState(false);
+  const [showDemandStatusSuggestions, setShowDemandStatusSuggestions] =
+    useState(false);
 
   return (
-    <div className="grid gap-4 md:grid-cols-3">
+    <div className="grid gap-4 overflow-visible md:grid-cols-3">
       <div className="flex flex-col gap-1">
         <label className="text-sm font-semibold text-slate-700">
           Demand ID
@@ -54,21 +75,77 @@ const HclDemand: React.FC<HclDemandProps> = ({ value, onChange }) => {
       </div>
       <div className="flex flex-col gap-1">
         <label className="text-sm font-semibold text-slate-700">TAG SPOC</label>
-        <input
-          type="text"
-          value={value.tag_spoc}
-          onChange={(e) => onChange({ tag_spoc: e.target.value })}
-          className={inputClasses}
-        />
+        <div className="relative">
+          <input
+            type="text"
+            value={value.tag_spoc}
+            onChange={(e) => {
+              onChange({ tag_spoc: e.target.value });
+              setShowTagSpocSuggestions(true);
+            }}
+            onFocus={() => setShowTagSpocSuggestions(true)}
+            onBlur={() =>
+              setTimeout(() => setShowTagSpocSuggestions(false), 150)
+            }
+            className={inputClasses}
+            autoComplete="off"
+          />
+          {showTagSpocSuggestions && filteredTagSpocs.length > 0 && (
+            <div className="absolute z-10 mt-1 max-h-60 w-full overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
+              {filteredTagSpocs.map((opt) => (
+                <button
+                  type="button"
+                  key={opt}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    onChange({ tag_spoc: opt });
+                    setShowTagSpocSuggestions(false);
+                  }}
+                  className="block w-full px-3 py-2 text-left text-sm hover:bg-slate-100"
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
       <div className="flex flex-col gap-1">
         <label className="text-sm font-semibold text-slate-700">TSC SPOC</label>
-        <input
-          type="text"
-          value={value.tsc_spoc}
-          onChange={(e) => onChange({ tsc_spoc: e.target.value })}
-          className={inputClasses}
-        />
+        <div className="relative">
+          <input
+            type="text"
+            value={value.tsc_spoc}
+            onChange={(e) => {
+              onChange({ tsc_spoc: e.target.value });
+              setShowTscSpocSuggestions(true);
+            }}
+            onFocus={() => setShowTscSpocSuggestions(true)}
+            onBlur={() =>
+              setTimeout(() => setShowTscSpocSuggestions(false), 150)
+            }
+            className={inputClasses}
+            autoComplete="off"
+          />
+          {showTscSpocSuggestions && filteredTscSpocs.length > 0 && (
+            <div className="absolute z-10 mt-1 max-h-60 w-full overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
+              {filteredTscSpocs.map((opt) => (
+                <button
+                  type="button"
+                  key={opt}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    onChange({ tsc_spoc: opt });
+                    setShowTscSpocSuggestions(false);
+                  }}
+                  className="block w-full px-3 py-2 text-left text-sm hover:bg-slate-100"
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
       <div className="flex flex-col gap-1">
         <label className="text-sm font-semibold text-slate-700">
@@ -81,25 +158,44 @@ const HclDemand: React.FC<HclDemandProps> = ({ value, onChange }) => {
           className={inputClasses}
         />
       </div>
-      <div className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1 overflow-visible md:col-span-3">
         <label className="text-sm font-semibold text-slate-700">
           Demand Status
         </label>
-        <select
-          value={value.demand_status}
-          onChange={(e) => onChange({ demand_status: e.target.value })}
-          className={`${inputClasses} bg-white`}
-        >
-          <option value="">---Select Status---</option>
-          <option value="New">New</option>
-          <option value="Pending approval for L4">
-            Pending approval for L4
-          </option>
-          <option value="Pending approval from WPC SPOC">
-            Pending approval from WPC SPOC
-          </option>
-          <option value="Moved to TAG">Moved to TAG</option>
-        </select>
+        <div className="relative">
+          <input
+            type="text"
+            value={value.demand_status}
+            onChange={(e) => {
+              onChange({ demand_status: e.target.value });
+              setShowDemandStatusSuggestions(true);
+            }}
+            onFocus={() => setShowDemandStatusSuggestions(true)}
+            onBlur={() =>
+              setTimeout(() => setShowDemandStatusSuggestions(false), 150)
+            }
+            className={inputClasses}
+            autoComplete="off"
+          />
+          {showDemandStatusSuggestions && filteredDemandStatuses.length > 0 && (
+            <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-96 overflow-y-auto rounded-md border border-slate-200 bg-white pb-2 shadow-2xl">
+              {filteredDemandStatuses.map((opt) => (
+                <button
+                  type="button"
+                  key={opt}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    onChange({ demand_status: opt });
+                    setShowDemandStatusSuggestions(false);
+                  }}
+                  className="block w-full px-3 py-2 text-left text-sm hover:bg-slate-100"
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
       <div className="flex flex-col gap-1">
         <label className="text-sm font-semibold text-slate-700">

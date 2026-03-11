@@ -20,6 +20,22 @@ const ResultTable = ({
   const [showChart, setShowChart] = useState(false);
   const [chartType, setChartType] = useState<"bar" | "pie">("bar");
 
+  const formatHeader = (col: string) => {
+    const noPrefix = col.includes(".") ? col.split(".").pop() || col : col;
+    const spaced = noPrefix.replace(/[_\.]+/g, " ").trim();
+    if (!spaced) return col;
+    return spaced
+      .split(" ")
+      .filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
+  };
+
+  const displayHeaders = useMemo(
+    () => columns.map((c) => formatHeader(c)),
+    [columns]
+  );
+
   const drillableColumns = useMemo(
     () => columns.filter((c) => !/count/i.test(c)),
     [columns]
@@ -78,7 +94,7 @@ const ResultTable = ({
   };
 
   const downloadCsv = () => {
-    const header = columns.map(toCsvValue).join(",");
+    const header = displayHeaders.map(toCsvValue).join(",");
     const body = rows
       .map((row) => columns.map((col) => toCsvValue(row[col])).join(","))
       .join("\n");
@@ -469,12 +485,12 @@ const ResultTable = ({
         <table className="min-w-full text-sm">
           <thead className="bg-slate-50 text-left text-slate-600 dark:bg-slate-900 dark:text-slate-300">
             <tr>
-              {columns.map((col) => (
+              {columns.map((col, idx) => (
                 <th
                   key={col}
                   className="whitespace-nowrap px-4 py-3 font-semibold"
                 >
-                  {col}
+                  {displayHeaders[idx]}
                 </th>
               ))}
               {drillAvailable && (

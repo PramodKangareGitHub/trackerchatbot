@@ -551,17 +551,93 @@ async def admin_list_datasets(
     user: User = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
     datasets = list_datasets(db=db)
-    return [
-        {
-            "id": d.id,
-            "original_file_name": d.original_file_name,
-            "table_name": d.table_name,
-            "row_count": d.row_count,
-            "columns": d.columns_json,
-            "created_at": d.created_at,
-        }
-        for d in datasets
-    ]
+
+    def inspect_table(table_name: str) -> tuple[List[str], int]:
+        with engine.connect() as conn:
+            cols = conn.execute(text(f'PRAGMA table_info("{table_name}")')).fetchall()
+            columns = [r[1] for r in cols]
+            count = conn.execute(text(f'SELECT COUNT(*) AS c FROM "{table_name}"')).scalar_one()
+            return columns, int(count)
+
+    existing_tables = set()
+    payload: List[Dict[str, Any]] = []
+
+    for d in datasets:
+        columns = list(d.columns_json or [])
+        row_count = d.row_count
+        try:
+            inspected_columns, inspected_count = inspect_table(d.table_name)
+            if inspected_columns:
+                columns = inspected_columns
+            row_count = inspected_count
+        except Exception:
+            # If inspection fails, fall back to stored metadata.
+            pass
+
+        payload.append(
+            {
+                "id": d.id,
+                "original_file_name": d.original_file_name,
+                "table_name": d.table_name,
+                "row_count": row_count,
+                "columns": columns,
+                "created_at": d.created_at,
+            }
+        )
+        existing_tables.add(d.table_name)
+
+    # Include any physical tables that exist but are missing from the dataset registry.
+    try:
+        with engine.connect() as conn:
+            table_rows = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+            table_names = [row[0] for row in table_rows]
+    except Exception:
+        table_names = []
+
+    for table_name in table_names:
+        if table_name.startswith("sqlite_"):
+            continue
+        if table_name in existing_tables:
+            continue
+        try:
+            columns, row_count = inspect_table(table_name)
+        except Exception:
+            continue
+
+        payload.append(
+            {
+                "id": table_name,
+                "original_file_name": f"{table_name}.table",
+                "table_name": table_name,
+                "row_count": row_count,
+                "columns": columns,
+                "created_at": None,
+            }
+        )
+
+    return payload
+
+
+@router.get("/datasets/{dataset_id}/columns")
+async def admin_get_dataset_columns(
+    dataset_id: str,
+    table: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    dataset: Dataset | None = None
+    try:
+        dataset = get_dataset(dataset_id, db)
+    except HTTPException:
+        # Allow direct table inspection even if dataset registry lacks this id.
+        dataset = None
+
+    table_name, columns = _resolve_table_and_columns(dataset_id, dataset, table)
+    return {
+        "dataset_id": dataset_id,
+        "table_name": table_name,
+        "columns": columns,
+    }
 
 
 @router.delete("/datasets/{dataset_id}")
@@ -642,6 +718,32 @@ async def admin_list_records(
 ) -> Dict[str, Any]:
     dataset = get_dataset(dataset_id, db)
 
+    # Parse multi-value filter inputs coming in as JSON array strings, pipe/comma delimited, or repeated params.
+    def parse_filter_values(raw: str | list[str] | None) -> List[str]:
+        if raw is None:
+            return []
+        values: List[str] = []
+        raw_values = raw if isinstance(raw, list) else [raw]
+        for item in raw_values:
+            text = str(item).strip()
+            if not text:
+                continue
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    values.extend([str(v).strip() for v in parsed if str(v).strip()])
+                    continue
+            except Exception:
+                pass
+            if "|" in text:
+                values.extend([p.strip() for p in text.split("|") if p.strip()])
+                continue
+            if "," in text:
+                values.extend([p.strip() for p in text.split(",") if p.strip()])
+                continue
+            values.append(text)
+        return values
+
     def discover_columns(table_name: str) -> List[str]:
         try:
             with engine.connect() as conn:
@@ -710,24 +812,130 @@ async def admin_list_records(
                 )
 
     if filters:
+        def coerce_list(val: Any) -> List[str]:
+            if val is None:
+                return []
+            if isinstance(val, list):
+                return [str(v) for v in val if str(v).strip()]
+            return [str(val)] if str(val).strip() else []
+
+        def build_clause(
+            table_alias: str,
+            column: str,
+            op: str,
+            values: List[str],
+            idx: int,
+            expr_alias: str | None = None,
+        ) -> tuple[str, str | None]:
+            op_l = op.lower()
+            alias = expr_alias or table_alias
+            placeholders: List[str] = []
+
+            def add(val: str, suffix: str) -> str:
+                key = f"multi_f_{idx}_{suffix}"
+                params[key] = val
+                return f":{key}"
+
+            if op_l in {"in", "not_in"}:
+                for i, v in enumerate(values):
+                    placeholders.append(add(v, str(i)));
+                if not placeholders:
+                    return "", None;
+                base = f'"{alias}"."{column}" IN ({", ".join(placeholders)})'
+                if op_l == "not_in":
+                    disallow = base
+                    return f"(NOT {base} OR \"{alias}\".\"{column}\" IS NULL)", disallow
+                return base, None
+
+            if op_l in {"=", "!=", ">", ">=", "<", "<=", "contains"}:
+                target = add(values[0], "0")
+                comparator = "LIKE" if op_l == "contains" else op_l
+                if op_l == "contains":
+                    params[f"multi_f_{idx}_0"] = f"%{values[0]}%"
+                clause = f'"{alias}"."{column}" {comparator} {target}'
+                if op_l == "!=":
+                    disallow = f'"{alias}"."{column}" = {target}'
+                    return f"({clause} OR \"{alias}\".\"{column}\" IS NULL)", disallow
+                return clause, None
+
+            if op_l == "between":
+                if len(values) < 2:
+                    return "", None
+                low = add(values[0], "0")
+                high = add(values[1], "1")
+                return f'"{alias}"."{column}" BETWEEN {low} AND {high}', None
+
+            # fallback to equality/in
+            target = add(values[0], "0")
+            return f'"{alias}"."{column}" = {target}', None
+
         for idx, raw in enumerate(filters):
-            if ":" not in raw:
-                continue
-            field, value = raw.split(":", 1)
-            prefix = field.split(".")[0] if "." in field else dataset_id
-            column = field.split(".")[-1]
+            parsed: Dict[str, Any] | None = None
+            try:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    parsed = data
+            except Exception:
+                parsed = None
+
+            if parsed is None:
+                if ":" not in raw:
+                    continue
+                field_part, value_raw = raw.split(":", 1)
+                op_part = "in"
+                if "|" in field_part:
+                    field_only, op_part = field_part.split("|", 1)
+                else:
+                    field_only = field_part
+                parsed = {
+                    "field": field_only,
+                    "op": op_part,
+                    "values": parse_filter_values(value_raw),
+                }
+            field = str(parsed.get("field") or "").strip()
+            op = str(parsed.get("op") or "in").lower()
+            values = coerce_list(parsed.get("values") or parsed.get("value"))
+            table_override = parsed.get("table")
+
+            if table_override and "." not in field:
+                field = f"{table_override}.{field}"
+
+            if not field or "." not in field:
+                prefix = dataset_id
+                column = field
+            else:
+                prefix = field.split(".")[0]
+                column = field.split(".")[-1]
+
             if prefix not in columns_by_key or column not in columns_by_key[prefix]:
                 raise HTTPException(status_code=400, detail="Filter column not found in dataset")
             table_alias = alias_by_key[prefix]
-            key = f"multi_f_{idx}"
-            clause = f'"{table_alias}"."{column}" = :{key}'
-            params[key] = value
+            if not values:
+                continue
+
+            expr_alias = "jf" if table_alias != base_table_name else table_alias
+            clause, disallow_clause = build_clause(
+                table_alias,
+                column,
+                op,
+                values,
+                idx,
+                expr_alias=expr_alias,
+            )
+            if not clause:
+                continue
+
             if table_alias == base_table_name:
                 where_clauses.append(clause)
             else:
-                join_filter_clauses.append(
-                    f"EXISTS (SELECT 1 FROM \"{table_alias}\" jf WHERE jf.\"unique_job_posting_id\" = \"{base_table_name}\".\"unique_job_posting_id\" AND {clause})"
-                )
+                if disallow_clause:
+                    join_filter_clauses.append(
+                        f"NOT EXISTS (SELECT 1 FROM \"{table_alias}\" jf WHERE jf.\"unique_job_posting_id\" = \"{base_table_name}\".\"unique_job_posting_id\" AND {disallow_clause})"
+                    )
+                else:
+                    join_filter_clauses.append(
+                        f"EXISTS (SELECT 1 FROM \"{table_alias}\" jf WHERE jf.\"unique_job_posting_id\" = \"{base_table_name}\".\"unique_job_posting_id\" AND {clause})"
+                    )
 
     try:
         all_where_clauses = where_clauses + join_filter_clauses

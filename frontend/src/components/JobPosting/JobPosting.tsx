@@ -766,9 +766,7 @@ const JobPosting: React.FC<JobPostingProps> = ({
         };
 
         const hclRes = await fetch(
-          `${apiBase}/api/hcl-demand/${encodeURIComponent(
-            hclPayload.demand_id
-          )}`,
+          `${apiBase}/api/hcl-demand/${encodeURIComponent(uniqueId)}`,
           {
             method: "PUT",
             headers,

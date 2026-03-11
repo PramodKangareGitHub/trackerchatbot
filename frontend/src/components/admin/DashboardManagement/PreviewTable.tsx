@@ -100,13 +100,21 @@ const PreviewTable = ({ tableConfig, data }: PreviewTableProps) => {
   const filterBy = tableConfig.filter_by || "";
   const filterValues = tableConfig.filter_values || [];
   const activeFilters = (tableConfig.filters || [])
-    .filter((f) => f.field && f.value)
+    .filter(
+      (f) => f.field && (Array.isArray(f.value) ? f.value.length : f.value)
+    )
     .map((f) => {
       const col = f.field || "";
       const prefixed =
         f.table && !col.includes(".") ? `${f.table}.${col}` : col;
-      return { ...f, column: prefixed };
-    });
+      const rawValues = Array.isArray(f.value) ? f.value : [f.value];
+      const values = rawValues
+        .map((v) => String(v))
+        .filter((v) => v.trim().length);
+      const op = (f.op || f.operator || "in").toLowerCase();
+      return { ...f, column: prefixed, values, op };
+    })
+    .filter((f) => (f.values || []).length);
 
   const valueFor = (row: Record<string, unknown>, col: string) => {
     if (col in row) return row[col];
@@ -145,6 +153,85 @@ const PreviewTable = ({ tableConfig, data }: PreviewTableProps) => {
     return values.some((v) => norm(v) === norm(label));
   };
 
+  const normalizeOp = (op?: string) => {
+    const o = (op || "").toLowerCase();
+    if (o === "!=") return "not_in";
+    if (o === "=") return "in";
+    if (o === "neq") return "not_in";
+    if (o === "eq") return "in";
+    return o || "in";
+  };
+
+  const normalizeValue = (v: unknown) =>
+    typeof v === "string"
+      ? v.trim().toLowerCase()
+      : String(v ?? "")
+          .trim()
+          .toLowerCase();
+
+  const toNumeric = (v: unknown): number | null => {
+    if (v === null || v === undefined) return null;
+    const num = Number(v);
+    if (Number.isFinite(num)) return num;
+    const dt = new Date(String(v));
+    if (!Number.isNaN(dt.getTime())) return dt.getTime();
+    return null;
+  };
+
+  const matchesFilterOp = (
+    col: string,
+    op: string,
+    values: string[],
+    rowVal: unknown
+  ) => {
+    const normalizedOp = normalizeOp(op);
+    const rowLabel = toLabel(col, values, rowVal);
+    const rowNorm = normalizeValue(rowLabel);
+    const normVals = values
+      .map((v) => normalizeValue(v))
+      .filter((v) => v.length);
+
+    if (!normVals.length) return true;
+
+    if (
+      normalizedOp === "between" ||
+      normalizedOp === ">" ||
+      normalizedOp === ">=" ||
+      normalizedOp === "<" ||
+      normalizedOp === "<="
+    ) {
+      const rowNum = toNumeric(rowVal);
+      const nums = values
+        .map((v) => toNumeric(v))
+        .filter((v): v is number => v !== null);
+      if (rowNum === null || !nums.length) return false;
+      if (normalizedOp === "between") {
+        if (nums.length >= 2 && nums[1] !== undefined) {
+          return rowNum >= nums[0] && rowNum <= nums[1];
+        }
+        return rowNum >= nums[0];
+      }
+      const target = nums[0];
+      if (target === undefined) return false;
+      if (normalizedOp === ">") return rowNum > target;
+      if (normalizedOp === ">=") return rowNum >= target;
+      if (normalizedOp === "<") return rowNum < target;
+      return rowNum <= target;
+    }
+
+    if (normalizedOp === "contains") {
+      return normVals.some((v) => rowNorm.includes(v));
+    }
+
+    if (normalizedOp === "not_in") {
+      if (rowVal === null || rowVal === undefined || rowNorm === "")
+        return true;
+      return normVals.every((v) => v !== rowNorm);
+    }
+
+    return normVals.some((v) => v === rowNorm);
+  };
+
   const rowsAfterFilter = data.rows.filter((row) => {
     const primaryMatches = filterBy
       ? matchesSelection(filterBy, filterValues, valueFor(row, filterBy))
@@ -154,9 +241,10 @@ const PreviewTable = ({ tableConfig, data }: PreviewTableProps) => {
     if (!activeFilters.length) return true;
 
     return activeFilters.every((f) =>
-      matchesSelection(
+      matchesFilterOp(
         f.column || f.field || "",
-        [f.value],
+        f.op,
+        f.values,
         valueFor(row, f.column || f.field || "")
       )
     );

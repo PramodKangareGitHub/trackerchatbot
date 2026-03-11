@@ -7,8 +7,8 @@ from app.db import engine, Base
 class HclDemand(Base):
     __tablename__ = "hcl_demand"
 
-    # demand_id is a unique business identifier, but the row is keyed by unique_job_posting_id
-    demand_id = Column(String(128), unique=True, index=True)
+    # demand_id is a business identifier but may repeat across postings
+    demand_id = Column(String(128), index=True)
     unique_job_posting_id = Column(
         String(128),
         ForeignKey("customer_requirements.unique_job_posting_id"),

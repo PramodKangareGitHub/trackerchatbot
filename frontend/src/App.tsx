@@ -3,7 +3,12 @@ import { useEffect, useMemo, useState } from "react";
 import AdminPanel from "./components/AdminPanel";
 import ChatWithDashboard from "./components/dashboard/ChatWithDashboard";
 import ChatWindow from "./components/ChatWindow";
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import {
+  BrowserRouter as Router,
+  Routes,
+  Route,
+  useNavigate,
+} from "react-router-dom";
 import CustomerRequirementPage from "./pages/CustomerRequirementPage";
 import JobPostingPage from "./pages/JobPostingPage";
 
@@ -95,6 +100,7 @@ export const AppTopBar: React.FC<AppTopBarProps> = ({
   isLeader,
   isDeliveryManager,
 }) => {
+  const navigate = useNavigate();
   return (
     <header className="flex items-center justify-between gap-4">
       <div>
@@ -140,6 +146,7 @@ export const AppTopBar: React.FC<AppTopBarProps> = ({
               onClick={() => {
                 handleModeSwitch("chat");
                 setShowProfileMenu(false);
+                navigate("/");
               }}
               className={`flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold transition hover:bg-slate-50 dark:hover:bg-slate-700 ${
                 roleView === "chat" ? "bg-slate-50 dark:bg-slate-700" : ""
@@ -152,6 +159,7 @@ export const AppTopBar: React.FC<AppTopBarProps> = ({
               onClick={() => {
                 handleOpenSettings();
                 setShowProfileMenu(false);
+                navigate("/");
               }}
               disabled={isViewerLike}
               className={`flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold transition hover:bg-slate-50 dark:hover:bg-slate-700 ${

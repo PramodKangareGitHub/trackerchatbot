@@ -1,3 +1,5 @@
+export type UserRole = "admin" | "developer" | "leader" | "delivery_manager";
+
 export type Dataset = {
   id: string;
   original_file_name: string;
@@ -6,8 +8,6 @@ export type Dataset = {
   columns: string[];
   created_at?: string;
 };
-
-export type UserRole = string;
 
 export type Dashboard = {
   id: string;
@@ -21,11 +21,19 @@ export type WidgetType = "table" | "chart";
 
 export type FieldRef = { table: string; column: string; alias?: string };
 
+export type FilterClause = {
+  table?: string;
+  field: string;
+  op?: string; // preferred operator key
+  operator?: string; // legacy/back-compat
+  value: string | string[];
+};
+
 export type TableConfig = {
   dataset_id?: string; // legacy single-table config
   joined_tables?: string[]; // new: multi-table selection keyed on unique_job_posting_id
   fields?: string[]; // legacy field list
-  field_refs?: FieldRef[]; // new: table-qualified fields
+  filters?: FilterClause[]; // multiple where clauses
   join_key?: string; // new: key for joining tables
   group_by?: string;
   group_by_ref?: FieldRef;
@@ -33,7 +41,6 @@ export type TableConfig = {
   filter_by?: string;
   filter_by_ref?: FieldRef;
   filter_values?: string[];
-  filters?: { table?: string; field: string; value: string }[]; // new: multiple where clauses
 };
 
 export type ChartConfig = {
@@ -51,7 +58,7 @@ export type ChartConfig = {
   filter_by?: string;
   filter_by_ref?: FieldRef;
   filter_values?: string[];
-  filters?: { table?: string; field: string; value: string }[];
+  filters?: FilterClause[];
 };
 
 export type Widget = {

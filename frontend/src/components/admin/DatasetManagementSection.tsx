@@ -4,8 +4,6 @@ export type DatasetManagementSectionProps = {
   datasets: Dataset[];
   datasetsLoading: boolean;
   actionLoading: boolean;
-  selectedDatasetId: string;
-  onSelectDataset: (id: string) => void;
   onDeleteDataset: (id: string) => void;
   onClearAll: () => void;
 };
@@ -14,8 +12,6 @@ const DatasetManagementSection = ({
   datasets,
   datasetsLoading,
   actionLoading,
-  selectedDatasetId,
-  onSelectDataset,
   onDeleteDataset,
   onClearAll,
 }: DatasetManagementSectionProps) => {
@@ -57,17 +53,6 @@ const DatasetManagementSection = ({
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => onSelectDataset(ds.id)}
-                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold shadow-sm ${
-                      selectedDatasetId === ds.id
-                        ? "bg-sky-600 text-white"
-                        : "border border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                    }`}
-                  >
-                    Use
-                  </button>
                   <button
                     type="button"
                     onClick={() => onDeleteDataset(ds.id)}
