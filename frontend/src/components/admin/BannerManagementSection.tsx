@@ -22,6 +22,8 @@ type BannerManagementSectionProps = {
     column: string,
     selectedValues?: string[],
     operator?: string,
+    aggregation?: "count" | "avg_age" | "avg_date_diff",
+    endColumn?: string,
     filters?: { table?: string; field: string; values: string[]; op: string }[]
   ) => Promise<BannerCountsResult>;
   userRole: UserRole;
@@ -35,6 +37,8 @@ type BannerDraft = {
   label: string;
   values: string[];
   op: string;
+  aggregation: "count" | "avg_age" | "avg_date_diff";
+  endColumn?: string;
   filters: {
     id: string;
     table?: string;
@@ -67,6 +71,8 @@ const BannerManagementSection = ({
     label: "",
     values: [],
     op: "in",
+    aggregation: "count",
+    endColumn: undefined,
     filters: [],
     role: userRole,
   });
@@ -177,6 +183,8 @@ const BannerManagementSection = ({
       label: nextColumn,
       values: [],
       op: "in",
+      aggregation: "count",
+      endColumn: undefined,
       filters: [],
       role: userRole,
     });
@@ -203,6 +211,9 @@ const BannerManagementSection = ({
       label: config.label || config.column,
       values: config.values || [],
       op: config.op || config.operator || "in",
+      aggregation:
+        (config.aggregation as BannerDraft["aggregation"]) || "count",
+      endColumn: config.end_column,
       filters: (config.filters || []).map((f) => ({
         id: crypto.randomUUID
           ? crypto.randomUUID()
@@ -290,16 +301,26 @@ const BannerManagementSection = ({
       setModalError("Select a dataset and column first.");
       return;
     }
+    if (
+      draft.aggregation === "avg_date_diff" &&
+      (!draft.endColumn || !draft.endColumn.trim())
+    ) {
+      setModalError("Select an end date column for average date diff.");
+      return;
+    }
     setPreviewLoading(true);
     setModalError(null);
     try {
       const isTableTotal = draft.column === TABLE_TOTAL_COLUMN;
+      const aggregation = isTableTotal ? "count" : draft.aggregation;
 
       const { counts: countsIn, total } = await loadValueCounts(
         draft.datasetId,
         draft.column,
-        isTableTotal ? [] : draft.values,
-        isTableTotal ? undefined : draft.op,
+        aggregation === "count" && !isTableTotal ? draft.values : [],
+        aggregation === "count" && !isTableTotal ? draft.op : undefined,
+        aggregation,
+        draft.endColumn,
         draft.filters.map((f) => ({
           table: f.table,
           field: f.field,
@@ -309,6 +330,17 @@ const BannerManagementSection = ({
       );
 
       let counts = [...countsIn];
+
+      if (aggregation !== "count") {
+        const avgValue = counts[0]?.count ?? 0;
+        const label = draft.label.trim() || draft.column;
+        const chip =
+          aggregation === "avg_date_diff"
+            ? "Avg diff (days)"
+            : "Avg age (days)";
+        setPreviewCounts([{ value: chip || label, count: avgValue }]);
+        return;
+      }
 
       if (!isTableTotal) {
         // Ensure explicitly selected values are present even if missing in data.
@@ -342,15 +374,19 @@ const BannerManagementSection = ({
       });
 
       const selected = new Set((draft.values || []).map((v) => v.trim()));
+      const isContainsOp = draft.op?.toLowerCase() === "contains";
+
       const aggregatedCount = isTableTotal
         ? total
-        : selected.size
-          ? counts.reduce(
-              (sum, entry) =>
-                selected.has(entry.value) ? sum + entry.count : sum,
-              0
-            )
-          : total;
+        : isContainsOp && selected.size
+          ? total
+          : selected.size
+            ? counts.reduce(
+                (sum, entry) =>
+                  selected.has(entry.value) ? sum + entry.count : sum,
+                0
+              )
+            : total;
 
       const combinedLabel = isTableTotal
         ? draft.label.trim() || "Total"
@@ -382,6 +418,7 @@ const BannerManagementSection = ({
     const targetDashboardId = isAdmin
       ? draft.dashboardId
       : draft.dashboardId || "home";
+    const isCountAgg = draft.aggregation === "count";
     const config: BannerConfig = {
       id,
       dashboard_id: targetDashboardId,
@@ -390,8 +427,11 @@ const BannerManagementSection = ({
       label:
         draft.label.trim() ||
         (draft.column === TABLE_TOTAL_COLUMN ? "Total" : draft.column),
-      values: draft.column === TABLE_TOTAL_COLUMN ? [] : draft.values,
-      op: draft.column === TABLE_TOTAL_COLUMN ? "in" : draft.op,
+      values:
+        draft.column === TABLE_TOTAL_COLUMN || !isCountAgg ? [] : draft.values,
+      op: draft.column === TABLE_TOTAL_COLUMN || !isCountAgg ? "in" : draft.op,
+      aggregation: draft.aggregation,
+      end_column: draft.endColumn,
       filters: draft.filters.map((f) => ({
         table: f.table,
         field: f.field,
@@ -678,7 +718,7 @@ const BannerManagementSection = ({
                     Add filter
                   </button>
                 </div>
-                <div className="grid gap-2 sm:grid-cols-3">
+                <div className="grid gap-2 sm:grid-cols-4">
                   <div className="space-y-1">
                     <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
                       Table
@@ -696,6 +736,8 @@ const BannerManagementSection = ({
                           column: nextColumn,
                           values: [],
                           op: "in",
+                          aggregation: "count",
+                          endColumn: undefined,
                           filters: [],
                           label: prev.label || nextColumn,
                         }));
@@ -740,6 +782,62 @@ const BannerManagementSection = ({
 
                   <div className="space-y-1">
                     <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                      Aggregation
+                    </span>
+                    <select
+                      value={draft.aggregation}
+                      onChange={(e) => {
+                        const nextAgg = e.target
+                          .value as BannerDraft["aggregation"];
+                        setDraft((prev) => ({
+                          ...prev,
+                          aggregation: nextAgg,
+                          values: [],
+                          op: "in",
+                          endColumn:
+                            nextAgg === "avg_date_diff"
+                              ? prev.endColumn
+                              : undefined,
+                        }));
+                        setPreviewCounts([]);
+                      }}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                    >
+                      <option value="count">Count values</option>
+                      <option value="avg_age">Average age (days)</option>
+                      <option value="avg_date_diff">
+                        Average date diff (days)
+                      </option>
+                    </select>
+                  </div>
+
+                  {draft.aggregation === "avg_date_diff" && (
+                    <div className="space-y-1">
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                        End date column
+                      </span>
+                      <select
+                        value={draft.endColumn || ""}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            endColumn: e.target.value || undefined,
+                          }))
+                        }
+                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                      >
+                        <option value="">Select end date</option>
+                        {columnsForDataset.map((col) => (
+                          <option key={col} value={col}>
+                            {col}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
                       Operator
                     </span>
                     <select
@@ -750,6 +848,7 @@ const BannerManagementSection = ({
                           op: e.target.value,
                         }))
                       }
+                      disabled={draft.aggregation !== "count"}
                       className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                     >
                       {operatorOptions.map((opt) => (
@@ -760,42 +859,63 @@ const BannerManagementSection = ({
                     </select>
                   </div>
 
-                  <div className="space-y-1">
+                  <div className="space-y-1 sm:col-span-4">
                     <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
                       Values (OR)
                     </span>
-                    <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs shadow-sm dark:border-slate-700 dark:bg-slate-900">
-                      {valuesLoading && (
-                        <span className="text-slate-500 dark:text-slate-400">
-                          Loading...
-                        </span>
-                      )}
-                      {!valuesLoading && !valueOptions.length && (
-                        <span className="text-slate-500 dark:text-slate-400">
-                          No values
-                        </span>
-                      )}
-                      {valueOptions.map((val) => {
-                        const checked = draft.values.includes(val);
-                        return (
-                          <label
-                            key={val}
-                            className={`flex items-center gap-2 rounded-full border px-3 py-1 font-semibold shadow-sm transition ${
-                              checked
-                                ? "border-sky-500 bg-sky-50 text-sky-700 dark:border-sky-400 dark:bg-sky-900/30 dark:text-sky-100"
-                                : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => toggleValue(val)}
-                            />
-                            {val}
-                          </label>
-                        );
-                      })}
-                    </div>
+                    {draft.aggregation !== "count" ? (
+                      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                        Values are ignored for averages. Filters still apply.
+                      </div>
+                    ) : draft.op === "contains" ? (
+                      <input
+                        type="text"
+                        value={draft.values[0] || ""}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            values: e.target.value ? [e.target.value] : [],
+                          }))
+                        }
+                        placeholder="Enter text to match"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                      />
+                    ) : (
+                      <div className="max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs shadow-sm dark:border-slate-700 dark:bg-slate-900">
+                        <div className="flex flex-wrap gap-2">
+                          {valuesLoading && (
+                            <span className="text-slate-500 dark:text-slate-400">
+                              Loading...
+                            </span>
+                          )}
+                          {!valuesLoading && !valueOptions.length && (
+                            <span className="text-slate-500 dark:text-slate-400">
+                              No values
+                            </span>
+                          )}
+                          {valueOptions.map((val) => {
+                            const checked = draft.values.includes(val);
+                            return (
+                              <label
+                                key={val}
+                                className={`flex items-center gap-2 rounded-full border px-3 py-1 font-semibold shadow-sm transition ${
+                                  checked
+                                    ? "border-sky-500 bg-sky-50 text-sky-700 dark:border-sky-400 dark:bg-sky-900/30 dark:text-sky-100"
+                                    : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleValue(val)}
+                                />
+                                {val}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
                 {!!draft.filters.length && (
@@ -861,38 +981,64 @@ const BannerManagementSection = ({
                           </select>
 
                           <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs shadow-sm dark:border-slate-700 dark:bg-slate-900">
-                            {optionLoading && (
-                              <span className="text-slate-500 dark:text-slate-400">
-                                Loading...
-                              </span>
+                            {f.op === "contains" ? (
+                              <input
+                                type="text"
+                                value={f.values[0] || ""}
+                                onChange={(e) =>
+                                  setDraft((prev) => ({
+                                    ...prev,
+                                    filters: prev.filters.map((fl) =>
+                                      fl.id === f.id
+                                        ? {
+                                            ...fl,
+                                            values: e.target.value
+                                              ? [e.target.value]
+                                              : [],
+                                          }
+                                        : fl
+                                    ),
+                                  }))
+                                }
+                                placeholder="Enter text to match"
+                                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                              />
+                            ) : (
+                              <>
+                                {optionLoading && (
+                                  <span className="text-slate-500 dark:text-slate-400">
+                                    Loading...
+                                  </span>
+                                )}
+                                {!optionLoading && !optionValues.length && (
+                                  <span className="text-slate-500 dark:text-slate-400">
+                                    No values
+                                  </span>
+                                )}
+                                {optionValues.map((val) => {
+                                  const checked = f.values.includes(val);
+                                  return (
+                                    <label
+                                      key={`${f.id}-${val}`}
+                                      className={`flex items-center gap-2 rounded-full border px-3 py-1 font-semibold shadow-sm transition ${
+                                        checked
+                                          ? "border-sky-500 bg-sky-50 text-sky-700 dark:border-sky-400 dark:bg-sky-900/30 dark:text-sky-100"
+                                          : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                      }`}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={() =>
+                                          toggleFilterValue(f.id, val)
+                                        }
+                                      />
+                                      {val}
+                                    </label>
+                                  );
+                                })}
+                              </>
                             )}
-                            {!optionLoading && !optionValues.length && (
-                              <span className="text-slate-500 dark:text-slate-400">
-                                No values
-                              </span>
-                            )}
-                            {optionValues.map((val) => {
-                              const checked = f.values.includes(val);
-                              return (
-                                <label
-                                  key={`${f.id}-${val}`}
-                                  className={`flex items-center gap-2 rounded-full border px-3 py-1 font-semibold shadow-sm transition ${
-                                    checked
-                                      ? "border-sky-500 bg-sky-50 text-sky-700 dark:border-sky-400 dark:bg-sky-900/30 dark:text-sky-100"
-                                      : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                                  }`}
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={() =>
-                                      toggleFilterValue(f.id, val)
-                                    }
-                                  />
-                                  {val}
-                                </label>
-                              );
-                            })}
                           </div>
 
                           <button

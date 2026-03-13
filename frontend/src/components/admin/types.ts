@@ -48,6 +48,14 @@ export type ChartConfig = {
   joined_tables?: string[];
   x_field?: string;
   y_field?: string;
+  x_date_mode?: "raw" | "ageing" | "quarter" | "financial_quarter";
+  x_ageing_ranges?: string[];
+  x_quarter_values?: string[];
+  x_fiscal_year_start_month?: number; // 1-12, defaults to Apr (4)
+  y_axis_mode?: "count" | "value" | "ageing_days" | "date_diff";
+  y_aggregation?: "sum" | "avg" | "min" | "max";
+  y_start_date_field?: string;
+  y_end_date_field?: string;
   join_key?: string; // new: key for joining tables
   x_ref?: FieldRef;
   y_ref?: FieldRef;

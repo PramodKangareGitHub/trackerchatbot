@@ -57,6 +57,8 @@ class CustomerRequirementIn(BaseModel):
     requirement_type: Optional[str] = None
     business_unit: Optional[str] = None
     customer_job_posting_date: Optional[datetime] = None
+    first_profile_submitted: Optional[bool] = None
+    first_profile_submitted_date: Optional[datetime] = None
     number_of_positions: Optional[int] = None
     sell_rate: Optional[float] = None
     job_posting_status: Optional[str] = None
@@ -88,6 +90,8 @@ class CustomerRequirementUpdate(BaseModel):
     requirement_type: Optional[str] = None
     business_unit: Optional[str] = None
     customer_job_posting_date: Optional[datetime] = None
+    first_profile_submitted: Optional[bool] = None
+    first_profile_submitted_date: Optional[datetime] = None
     number_of_positions: Optional[int] = None
     sell_rate: Optional[float] = None
     job_posting_status: Optional[str] = None
@@ -121,6 +125,8 @@ def _serialize_requirement(row: CustomerRequirement) -> dict:
         "requirement_type",
         "business_unit",
         "customer_job_posting_date",
+        "first_profile_submitted",
+        "first_profile_submitted_date",
         "number_of_positions",
         "sell_rate",
         "job_posting_status",

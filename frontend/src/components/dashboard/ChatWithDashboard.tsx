@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ChatWindow from "../ChatWindow";
 import DashboardChartPreview, {
@@ -7,6 +7,13 @@ import DashboardChartPreview, {
 import Banner from "./Banner";
 import ReportModal from "./ReportModal";
 import OpenDemandModal, { HclOnboardingRow } from "./OpenDemandModal";
+import {
+  DEFAULT_CUSTOMER_HIRING_MANAGERS,
+  DEFAULT_CUSTOMER_LEADERS,
+  DEFAULT_HCL_DELIVER_SPOCS,
+  DEFAULT_HCL_LEADERS,
+  DEFAULT_PORTFOLIOS,
+} from "../../models/customerRequirementDefaults";
 
 type Dashboard = {
   id: string;
@@ -21,6 +28,40 @@ export type ChatSectionProps = {
   hideChat?: boolean;
 };
 
+type SideFilters = {
+  portfolios: string[];
+  customerLeaders: string[];
+  customerHiringManagers: string[];
+  hclLeaders: string[];
+  hclDeliverSpocs: string[];
+  quarters: string[];
+  dateFrom: string;
+  dateTo: string;
+};
+
+const QUARTERS = ["Q1", "Q2", "Q3", "Q4"];
+const SIDE_FILTER_FIELDS = [
+  "portfolio",
+  "customer_requirements.portfolio",
+  "interviewed_candidate_details.portfolio",
+  "customer_leader",
+  "customer_leaders",
+  "customer_requirements.customer_leader",
+  "customer_requirements.customer_leaders",
+  "customer_hiring_manager",
+  "customer_requirements.customer_hiring_manager",
+  "hcl_leader",
+  "customer_requirements.hcl_leader",
+  "hcl_deliver_spoc",
+  "hcl_deliver_spocs",
+  "customer_requirements.hcl_deliver_spoc",
+  "customer_requirements.hcl_deliver_spocs",
+  "customer_job_posting_date",
+  "created_at",
+  "job_posting_date",
+  "job_date",
+];
+
 const ChatWithDashboard = ({
   authToken,
   authUserRole,
@@ -28,6 +69,16 @@ const ChatWithDashboard = ({
   hideChat = false,
 }: ChatSectionProps) => {
   const navigate = useNavigate();
+  const [sideFilters, setSideFilters] = useState<SideFilters>({
+    portfolios: [],
+    customerLeaders: [],
+    customerHiringManagers: [],
+    hclLeaders: [],
+    hclDeliverSpocs: [],
+    quarters: [],
+    dateFrom: "",
+    dateTo: "",
+  });
   const [widgetOptions, setWidgetOptions] = useState<
     {
       id: string;
@@ -77,6 +128,18 @@ const ChatWithDashboard = ({
   const [openDemandsDraft, setOpenDemandsDraft] =
     useState<HclOnboardingRow | null>(null);
   const [openDemandsSaving, setOpenDemandsSaving] = useState(false);
+  const [portfolioOptions, setPortfolioOptions] =
+    useState<string[]>(DEFAULT_PORTFOLIOS);
+  const [customerLeaderOptions, setCustomerLeaderOptions] = useState<string[]>(
+    DEFAULT_CUSTOMER_LEADERS
+  );
+  const [customerHiringManagerOptions, setCustomerHiringManagerOptions] =
+    useState<string[]>(DEFAULT_CUSTOMER_HIRING_MANAGERS);
+  const [hclLeaderOptions, setHclLeaderOptions] =
+    useState<string[]>(DEFAULT_HCL_LEADERS);
+  const [hclDeliverSpocOptions, setHclDeliverSpocOptions] = useState<string[]>(
+    DEFAULT_HCL_DELIVER_SPOCS
+  );
 
   useEffect(() => {
     const loadDashboards = async () => {
@@ -191,6 +254,72 @@ const ChatWithDashboard = ({
   }, [authToken, openDemandsOpen]);
 
   useEffect(() => {
+    const loadDefaults = async () => {
+      try {
+        const apiBase =
+          import.meta.env.VITE_API_BASE || "http://localhost:8000";
+        const res = await fetch(
+          `${apiBase}/api/customer-requirements/defaults`,
+          {
+            headers: authToken
+              ? { Authorization: `Bearer ${authToken}` }
+              : undefined,
+          }
+        );
+        if (!res.ok) {
+          setPortfolioOptions(DEFAULT_PORTFOLIOS);
+          setCustomerLeaderOptions(DEFAULT_CUSTOMER_LEADERS);
+          setCustomerHiringManagerOptions(DEFAULT_CUSTOMER_HIRING_MANAGERS);
+          setHclLeaderOptions(DEFAULT_HCL_LEADERS);
+          setHclDeliverSpocOptions(DEFAULT_HCL_DELIVER_SPOCS);
+          return;
+        }
+        const data = await res.json();
+        const mergedPortfolios = Array.isArray(data?.portfolios)
+          ? Array.from(new Set([...DEFAULT_PORTFOLIOS, ...data.portfolios]))
+          : DEFAULT_PORTFOLIOS;
+        const mergedCustomerLeaders = Array.isArray(data?.customer_leaders)
+          ? Array.from(
+              new Set([...DEFAULT_CUSTOMER_LEADERS, ...data.customer_leaders])
+            )
+          : DEFAULT_CUSTOMER_LEADERS;
+        const mergedCustomerHiringManagers = Array.isArray(
+          data?.customer_hiring_managers
+        )
+          ? Array.from(
+              new Set([
+                ...DEFAULT_CUSTOMER_HIRING_MANAGERS,
+                ...data.customer_hiring_managers,
+              ])
+            )
+          : DEFAULT_CUSTOMER_HIRING_MANAGERS;
+        const mergedHclLeaders = Array.isArray(data?.hcl_leaders)
+          ? Array.from(new Set([...DEFAULT_HCL_LEADERS, ...data.hcl_leaders]))
+          : DEFAULT_HCL_LEADERS;
+        const mergedHclDeliverSpocs = Array.isArray(data?.hcl_deliver_spocs)
+          ? Array.from(
+              new Set([...DEFAULT_HCL_DELIVER_SPOCS, ...data.hcl_deliver_spocs])
+            )
+          : DEFAULT_HCL_DELIVER_SPOCS;
+        setPortfolioOptions(mergedPortfolios);
+        setCustomerLeaderOptions(mergedCustomerLeaders);
+        setCustomerHiringManagerOptions(mergedCustomerHiringManagers);
+        setHclLeaderOptions(mergedHclLeaders);
+        setHclDeliverSpocOptions(mergedHclDeliverSpocs);
+      } catch (err) {
+        console.error("Failed to load dashboard defaults", err);
+        setPortfolioOptions(DEFAULT_PORTFOLIOS);
+        setCustomerLeaderOptions(DEFAULT_CUSTOMER_LEADERS);
+        setCustomerHiringManagerOptions(DEFAULT_CUSTOMER_HIRING_MANAGERS);
+        setHclLeaderOptions(DEFAULT_HCL_LEADERS);
+        setHclDeliverSpocOptions(DEFAULT_HCL_DELIVER_SPOCS);
+      }
+    };
+
+    loadDefaults();
+  }, [authToken]);
+
+  useEffect(() => {
     const load = async () => {
       if (!authToken || !selectedDashboardId) {
         setWidgetOptions([]);
@@ -303,8 +432,34 @@ const ChatWithDashboard = ({
     const groupValues: string[] = cfg.group_by_values || [];
     const filterBy = cfg.filter_by || "";
     const filterValues: string[] = cfg.filter_values || [];
+    const isRangeAgg =
+      (datasetCols || []).includes("range") &&
+      (datasetCols || []).includes("count");
+    const ageingFields = (cfg.filters || [])
+      .filter(
+        (f: any) => (f.op || f.operator || "").toLowerCase() === "ageing_range"
+      )
+      .map((f: any) => {
+        const field = f.field || "";
+        return field.includes(".") ? field : `${cfg.dataset_id || ""}.${field}`;
+      });
     const baseColumns = cfg.fields?.length ? cfg.fields : datasetCols;
-    const columns = (baseColumns || []).filter((c: string) => c);
+    const columns = (() => {
+      if (isRangeAgg) {
+        const cols = datasetCols || baseColumns || [];
+        const drop = new Set(
+          ageingFields.flatMap((c: string) => [c, c.split(".").slice(-1)[0]])
+        );
+        return cols.filter((c: string) => !drop.has(c));
+      }
+      const trimmed = (baseColumns || []).filter((c: string) => c);
+      if (!trimmed.length) return datasetCols || [];
+      const sampleRow = rows[0] || {};
+      const hasAny = trimmed.some(
+        (c: string) => c in sampleRow || c.split(".").slice(-1)[0] in sampleRow
+      );
+      return hasAny ? trimmed : datasetCols || trimmed;
+    })();
 
     const normalize = (col: string) =>
       col.toLowerCase().replace(/[^a-z0-9]+/g, "_");
@@ -353,13 +508,39 @@ const ChatWithDashboard = ({
 
     const toQuarterLabel = (val: unknown, withYear = false) => {
       if (val === null || val === undefined) return "(blank)";
-      const parsed = new Date(String(val));
-      if (Number.isNaN(parsed.getTime())) return String(val);
-      // Use UTC to avoid timezone shifting year/month
-      const q = Math.floor(parsed.getUTCMonth() / 3) + 1;
-      const year = parsed.getUTCFullYear();
-      if (q < 1 || q > 4 || !Number.isFinite(year)) return String(val);
-      return withYear ? `Q${q} ${year}` : `Q${q}`;
+      const str = String(val);
+      const m = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      let month: number | null = null;
+      let year: number | null = null;
+      if (m) {
+        year = Number(m[1]);
+        month = Number(m[2]) - 1;
+      } else {
+        const parsed = new Date(str);
+        if (!Number.isNaN(parsed.getTime())) {
+          month = parsed.getUTCMonth();
+          year = parsed.getUTCFullYear();
+        }
+      }
+      if (month === null || year === null || month < 0 || month > 11)
+        return str;
+      let q: number;
+      let fy = year;
+      if (month >= 3 && month <= 5) {
+        q = 1;
+        fy = year;
+      } else if (month >= 6 && month <= 8) {
+        q = 2;
+        fy = year;
+      } else if (month >= 9 && month <= 11) {
+        q = 3;
+        fy = year;
+      } else {
+        q = 4;
+        fy = year - 1;
+      }
+      if (!Number.isFinite(fy)) return String(val);
+      return withYear ? `Q${q} FY${fy}` : `Q${q}`;
     };
 
     const toDayRangeLabel = (val: unknown) => {
@@ -381,13 +562,15 @@ const ChatWithDashboard = ({
       val: unknown
     ) => {
       if (isAgeing(col)) return bucketAgeLabel(val);
-      if (isDateCol(col)) {
-        const hasQuarter = hasQuarterVal(selectedValues);
-        const hasQuarterYear = hasQuarterValWithYear(selectedValues);
-        const hasDayRanges = hasDayRangeVal(selectedValues);
-        const quarterLabel = toQuarterLabel(val, false);
-        const quarterLabelYear = toQuarterLabel(val, true);
-        const dayLabel = toDayRangeLabel(val);
+
+      const hasQuarter = hasQuarterVal(selectedValues);
+      const hasQuarterYear = hasQuarterValWithYear(selectedValues);
+      const hasDayRanges = hasDayRangeVal(selectedValues);
+      const quarterLabel = toQuarterLabel(val, false);
+      const quarterLabelYear = toQuarterLabel(val, true);
+      const dayLabel = toDayRangeLabel(val);
+
+      if (isDateCol(col) || hasDayRanges || hasQuarter) {
         if (hasDayRanges && hasQuarter) {
           if (selectedValues.includes(dayLabel)) return dayLabel;
           if (hasQuarterYear && selectedValues.includes(quarterLabelYear))
@@ -402,7 +585,22 @@ const ChatWithDashboard = ({
           return quarterLabel;
         }
       }
+
       return val === null || val === undefined ? "(blank)" : String(val);
+    };
+
+    const formatWithAgeingContext = (
+      col: string,
+      selection: string[],
+      rawVal: unknown
+    ) => {
+      const label = toLabelFor(col, selection, rawVal);
+      const isRange = selection.every((v) => /^\d+\s*-\s*\d+$/.test(v));
+      if (selection.length && isRange) {
+        const primary = selection.length === 1 ? selection[0] : label;
+        return `Ageing: ${primary} days`;
+      }
+      return label;
     };
 
     const valueFor = (row: Record<string, unknown>, col: string) => {
@@ -479,6 +677,11 @@ const ChatWithDashboard = ({
       values: string[],
       rowVal: unknown
     ) => {
+      if (rowVal === undefined) {
+        // Column not present in returned rows (likely filtered server-side on joined table)
+        // so do not exclude client-side.
+        return true;
+      }
       const normalizedOp = normalizeOp(op);
       const rowLabel = toLabelFor(col, values, rowVal);
       const rowNorm = normalizeValue(rowLabel);
@@ -487,6 +690,28 @@ const ChatWithDashboard = ({
         .filter((v) => v.length);
 
       if (!normVals.length) return true;
+
+      if (normalizedOp === "ageing_range") {
+        const asNumber = Number(rowVal);
+        const fromNumber = Number.isFinite(asNumber) ? asNumber : null;
+        const dt = new Date(String(rowVal));
+        const fromDate = Number.isNaN(dt.getTime())
+          ? null
+          : Math.floor((Date.now() - dt.getTime()) / (1000 * 60 * 60 * 24));
+        const diffDays = fromNumber ?? fromDate;
+        if (diffDays === null) return true;
+        return values.some((v) => matchesAgeRange(diffDays, v));
+      }
+
+      if (normalizedOp === "quarter") {
+        const quarterLabel = toQuarterLabel(rowVal, false);
+        const quarterLabelYear = toQuarterLabel(rowVal, true);
+        return normVals.some(
+          (v) =>
+            v === normalizeValue(quarterLabel) ||
+            v === normalizeValue(quarterLabelYear)
+        );
+      }
 
       if (
         normalizedOp === "between" ||
@@ -545,25 +770,41 @@ const ChatWithDashboard = ({
       })
       .filter((f: any) => (f.values || []).length);
 
-    const rowsAfterFilter = rows.filter((row) => {
-      const primaryMatches = filterBy
-        ? matchesSelection(filterBy, filterValues, valueFor(row, filterBy))
-        : true;
-      if (!primaryMatches) return false;
+    const ageingSelections = new Map<string, string[]>();
+    activeFilters
+      .filter((f: any) => f.op === "ageing_range" || f.op === "quarter")
+      .forEach((f: any) => {
+        if (f.column) {
+          const vals = f.values || [];
+          ageingSelections.set(f.column, vals);
+          const suffix = f.column.includes(".")
+            ? f.column.split(".").slice(-1)[0]
+            : f.column;
+          if (suffix) ageingSelections.set(suffix, vals);
+        }
+      });
 
-      if (!activeFilters.length) return true;
+    const rowsAfterFilter = isRangeAgg
+      ? rows
+      : rows.filter((row) => {
+          const primaryMatches = filterBy
+            ? matchesSelection(filterBy, filterValues, valueFor(row, filterBy))
+            : true;
+          if (!primaryMatches) return false;
 
-      return activeFilters.every((f: any) =>
-        matchesFilterOp(
-          f.column || f.field || "",
-          f.op,
-          f.values,
-          valueFor(row, f.column || f.field || "")
-        )
-      );
-    });
+          if (!activeFilters.length) return true;
 
-    if (groupBy) {
+          return activeFilters.every((f: any) =>
+            matchesFilterOp(
+              f.column || f.field || "",
+              f.op,
+              f.values,
+              valueFor(row, f.column || f.field || "")
+            )
+          );
+        });
+
+    if (groupBy && !isRangeAgg) {
       const filteredRows = rowsAfterFilter.filter((row) =>
         matchesSelection(groupBy, groupValues, valueFor(row, groupBy))
       );
@@ -582,18 +823,34 @@ const ChatWithDashboard = ({
 
       filteredRows.forEach((row) => {
         const groupKeyRaw = valueFor(row, groupBy);
-        const groupLabel = toLabelFor(groupBy, groupValues, groupKeyRaw);
+        const selectionForGroup = ageingSelections.get(groupBy) || groupValues;
+        const groupLabel = formatWithAgeingContext(
+          groupBy,
+          selectionForGroup,
+          groupKeyRaw
+        );
 
         const keyParts = [
           groupLabel,
-          ...columns.map((c) => String(valueFor(row, c) ?? "")),
+          ...columns.map((c) => {
+            const selection = ageingSelections.get(c) || [];
+            const rawVal = valueFor(row, c);
+            const display = selection.length
+              ? formatWithAgeingContext(c, selection, rawVal)
+              : rawVal;
+            return String(display ?? "");
+          }),
         ];
         const key = keyParts.join("|");
 
         if (!grouped.has(key)) {
           const baseRow: Record<string, unknown> = {};
           columns.forEach((c) => {
-            baseRow[c] = valueFor(row, c);
+            const selection = ageingSelections.get(c) || [];
+            const rawVal = valueFor(row, c);
+            baseRow[c] = selection.length
+              ? formatWithAgeingContext(c, selection, rawVal)
+              : rawVal;
           });
           if (showGroupColumn) {
             baseRow[groupBy] = groupLabel;
@@ -614,10 +871,81 @@ const ChatWithDashboard = ({
       return { columns: finalColumns, displayColumns, rows: rowsOut };
     }
 
-    const rowsOut = rowsAfterFilter.slice(0, 50).map((row) => {
+    const collapseRangeRows = (input: Record<string, unknown>[]) => {
+      const keyCols = columns.filter((c) => c !== "count");
+      if (!keyCols.length) return input;
+      const grouped = new Map<
+        string,
+        { row: Record<string, unknown>; count: number }
+      >();
+      input.forEach((row) => {
+        const keyParts = keyCols.map((c) => {
+          const selection =
+            ageingSelections.get(c) ||
+            ageingSelections.get(c.split(".").slice(-1)[0]) ||
+            [];
+          const rawVal = valueFor(row, c);
+          const display = selection.length
+            ? formatWithAgeingContext(c, selection, rawVal)
+            : rawVal;
+          return display === null || display === undefined
+            ? ""
+            : String(display);
+        });
+        const key = keyParts.join("|");
+        const rowCount = Number(valueFor(row, "count")) || 0;
+        if (grouped.has(key)) {
+          grouped.get(key)!.count += rowCount;
+        } else {
+          const base: Record<string, unknown> = {};
+          keyCols.forEach((c) => {
+            const selection =
+              ageingSelections.get(c) ||
+              ageingSelections.get(c.split(".").slice(-1)[0]) ||
+              [];
+            const rawVal = valueFor(row, c);
+            base[c] = selection.length
+              ? formatWithAgeingContext(c, selection, rawVal)
+              : rawVal;
+          });
+          grouped.set(key, { row: base, count: rowCount });
+        }
+      });
+      return Array.from(grouped.values()).map(({ row, count }) => ({
+        ...row,
+        count,
+      }));
+    };
+
+    const sourceRows = isRangeAgg
+      ? collapseRangeRows(rows)
+      : rowsAfterFilter.slice(0, 50);
+
+    const rowsOut = sourceRows.map((row) => {
       const out: Record<string, unknown> = {};
       columns.forEach((c) => {
-        out[c] = valueFor(row, c);
+        const selection = ageingSelections.get(c) || [];
+        const rawVal = valueFor(row, c);
+        out[c] = selection.length
+          ? formatWithAgeingContext(c, selection, rawVal)
+          : rawVal;
+      });
+
+      // Ensure date-difference charts have both date fields available to the preview renderer
+      // even when those fields are not part of the displayed column list.
+      if (cfg.y_axis_mode === "date_diff") {
+        const startKey = cfg.y_start_date_field || cfg.y_field;
+        const endKey = cfg.y_end_date_field;
+        if (startKey) out[startKey] = valueFor(row, startKey);
+        if (endKey) out[endKey] = valueFor(row, endKey);
+      }
+
+      // Keep side-filter fields on the row even if they are not displayed, so
+      // client-side filters work for aggregated/date-diff charts.
+      SIDE_FILTER_FIELDS.forEach((key) => {
+        if (out[key] !== undefined) return;
+        const val = valueFor(row, key);
+        if (val !== undefined) out[key] = val;
       });
       return out;
     });
@@ -638,6 +966,7 @@ const ChatWithDashboard = ({
       value?: string | string[];
     }[] = cfg.filters || [];
     const joinedTables: string[] = cfg.joined_tables || [];
+    const fields: string[] = cfg.fields || [];
     const normalize = (s: string) =>
       s.toLowerCase().replace(/[^a-z0-9]+/g, "_");
     const isDateBucket = normalize(filterBy || "") === "jp_posting_date_to_hcl";
@@ -653,6 +982,7 @@ const ChatWithDashboard = ({
       (isQuarterVals || isDayRangeVals);
 
     const params = new URLSearchParams();
+    (fields || []).forEach((f) => params.append("select_fields", f));
     const joinSet = new Set((joinedTables || []).filter(Boolean));
     const baseTable = cfg.dataset_id || "";
     let targetFilterBy = filterBy;
@@ -746,16 +1076,32 @@ const ChatWithDashboard = ({
             const prefix = val.split(".")[0];
             if (prefix && prefix !== datasetId) joined.add(prefix);
           };
-          (cfg.fields || []).forEach(collectPrefix);
-          collectPrefix(cfg.group_by);
-          collectPrefix(cfg.filter_by);
+
+          const addField = (val?: string) => {
+            if (!val) return;
+            collectPrefix(val);
+            const prefixed = val.includes(".") ? val : `${datasetId}.${val}`;
+            selectFields.add(prefixed);
+          };
+
+          const selectFields = new Set<string>();
+          (cfg.fields || []).forEach(addField);
+          addField(cfg.x_field);
+          addField(cfg.y_field);
+          addField(cfg.group_by);
+          addField(cfg.filter_by);
+          addField(cfg.y_start_date_field);
+          addField(cfg.y_end_date_field);
+          SIDE_FILTER_FIELDS.forEach(addField);
           (cfg.filters || []).forEach((f: any) => {
-            collectPrefix(f.field);
+            addField(f.field);
             if (f.table && f.table !== datasetId) joined.add(f.table);
           });
+
           const filterQs = buildFilterQuery({
             ...cfg,
             joined_tables: Array.from(joined),
+            select_fields: Array.from(selectFields),
           });
           const limit = cfg.group_by ? 2000 : 50;
           const res = await fetch(
@@ -861,6 +1207,9 @@ const ChatWithDashboard = ({
     ? "grid gap-4"
     : "grid gap-4 lg:grid-cols-[minmax(260px,26%),1fr]";
 
+  const isHomeDashboard = selectedDashboardId === "home";
+  const hasSideFilters = !isHomeDashboard;
+
   const canOpenReport = true;
 
   const handleEditRecord = (row: Record<string, unknown>) => {
@@ -948,6 +1297,276 @@ const ChatWithDashboard = ({
       setOpenDemandsSaving(false);
     }
   };
+
+  const handleMultiSelect =
+    (
+      key: keyof Pick<
+        SideFilters,
+        | "portfolios"
+        | "customerLeaders"
+        | "customerHiringManagers"
+        | "hclLeaders"
+        | "hclDeliverSpocs"
+        | "quarters"
+      >
+    ) =>
+    (event: ChangeEvent<HTMLSelectElement>) => {
+      const values = Array.from(event.target.selectedOptions).map(
+        (opt) => opt.value
+      );
+      setSideFilters((prev) => ({ ...prev, [key]: values }));
+    };
+
+  const handleDateChange =
+    (key: keyof Pick<SideFilters, "dateFrom" | "dateTo">) =>
+    (event: ChangeEvent<HTMLInputElement>) => {
+      setSideFilters((prev) => ({ ...prev, [key]: event.target.value }));
+    };
+
+  const handleClearFilters = () => {
+    setSideFilters({
+      portfolios: [],
+      customerLeaders: [],
+      customerHiringManagers: [],
+      hclLeaders: [],
+      hclDeliverSpocs: [],
+      quarters: [],
+      dateFrom: "",
+      dateTo: "",
+    });
+  };
+
+  const filteredPreviewItems = useMemo(() => {
+    if (!hasSideFilters || !sideFilters) return previewItems;
+
+    const norm = (v: unknown) =>
+      String(v ?? "")
+        .toLowerCase()
+        .trim();
+    const inSelection = (val: unknown, list: string[]) => {
+      if (!list.length) return true;
+      const v = norm(val);
+      return list.some((i) => norm(i) === v);
+    };
+    const toDate = (val: unknown) => {
+      if (!val) return null;
+      const d = new Date(String(val));
+      return Number.isNaN(d.getTime()) ? null : d;
+    };
+    const matchesQuarter = (val: unknown) => {
+      if (!sideFilters.quarters.length) return true;
+      const d = toDate(val);
+      if (!d) return false;
+      const month = d.getMonth();
+      const q = month < 3 ? "Q1" : month < 6 ? "Q2" : month < 9 ? "Q3" : "Q4";
+      return sideFilters.quarters.includes(q);
+    };
+    const withinDateRange = (val: unknown) => {
+      const d = toDate(val);
+      if (!d) return !(sideFilters.dateFrom || sideFilters.dateTo);
+      if (sideFilters.dateFrom) {
+        const from = toDate(sideFilters.dateFrom);
+        if (from && d < from) return false;
+      }
+      if (sideFilters.dateTo) {
+        const to = toDate(sideFilters.dateTo);
+        if (to && d > to) return false;
+      }
+      return true;
+    };
+
+    const pickDateField = (row: Record<string, unknown>, cfg: any): unknown => {
+      const candidates: (string | undefined)[] = [];
+      if (cfg?.y_axis_mode === "date_diff") {
+        candidates.push(cfg?.y_start_date_field || cfg?.y_field);
+        candidates.push(cfg?.y_end_date_field);
+      }
+      candidates.push(
+        "customer_job_posting_date",
+        "created_at",
+        "job_posting_date",
+        "job_date"
+      );
+      for (const key of candidates) {
+        if (!key) continue;
+        const val = (row as Record<string, unknown>)[key];
+        if (val !== undefined && val !== null && String(val).length) {
+          return val;
+        }
+      }
+      return row.customer_job_posting_date ?? row.created_at;
+    };
+
+    const pickValue = (
+      row: Record<string, unknown>,
+      keys: (string | undefined)[]
+    ): unknown => {
+      for (const key of keys) {
+        if (!key) continue;
+        const val = (row as Record<string, unknown>)[key];
+        if (val !== undefined && val !== null) return val;
+      }
+      return undefined;
+    };
+
+    const filterRow = (row: Record<string, unknown>, cfg: any) => {
+      const portfolioOk = inSelection(
+        pickValue(row, [
+          "portfolio",
+          "customer_requirements.portfolio",
+          "interviewed_candidate_details.portfolio",
+          cfg?.group_by,
+        ]),
+        sideFilters.portfolios
+      );
+      const leaderOk = inSelection(
+        pickValue(row, [
+          "customer_leader",
+          "customer_leaders",
+          "customer_requirements.customer_leader",
+          "customer_requirements.customer_leaders",
+        ]),
+        sideFilters.customerLeaders
+      );
+      const hiringOk = inSelection(
+        pickValue(row, [
+          "customer_hiring_manager",
+          "customer_requirements.customer_hiring_manager",
+        ]),
+        sideFilters.customerHiringManagers
+      );
+      const hclLeaderOk = inSelection(
+        pickValue(row, ["hcl_leader", "customer_requirements.hcl_leader"]),
+        sideFilters.hclLeaders
+      );
+      const spocOk = inSelection(
+        pickValue(row, [
+          "hcl_deliver_spoc",
+          "hcl_deliver_spocs",
+          "customer_requirements.hcl_deliver_spoc",
+          "customer_requirements.hcl_deliver_spocs",
+        ]),
+        sideFilters.hclDeliverSpocs
+      );
+      const dateField = pickDateField(row, cfg);
+      const quarterOk = matchesQuarter(dateField);
+      const dateRangeOk = withinDateRange(dateField);
+      return (
+        portfolioOk &&
+        leaderOk &&
+        hiringOk &&
+        hclLeaderOk &&
+        spocOk &&
+        quarterOk &&
+        dateRangeOk
+      );
+    };
+
+    return previewItems.map((item) => ({
+      ...item,
+      rows: item.rows.filter((row) => filterRow(row, item.config)),
+    }));
+  }, [hasSideFilters, previewItems, sideFilters]);
+
+  const displayedItems = hasSideFilters ? filteredPreviewItems : previewItems;
+
+  const renderWidgetGrid = (items: typeof previewItems) => (
+    <div className="grid items-start gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {items.map((item) => {
+        const isCollapsed = collapsedWidgetIds.includes(item.widgetId);
+        return (
+          <div
+            key={item.widgetId}
+            className={`flex flex-col rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-800 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${
+              isCollapsed ? "space-y-1" : "space-y-3 h-[420px]"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold text-slate-900 dark:text-white">
+                {item.title}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => toggleWidgetCollapse(item.widgetId)}
+                  className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-800"
+                  aria-label={isCollapsed ? "Expand widget" : "Collapse widget"}
+                >
+                  <span aria-hidden>{isCollapsed ? "▸" : "▾"}</span>{" "}
+                  {isCollapsed ? "Expand" : "Collapse"}
+                </button>
+              </div>
+            </div>
+
+            {!isCollapsed && (
+              <div className="flex h-full flex-col space-y-3">
+                {item.widgetType === "chart" ? (
+                  <DashboardChartPreview
+                    title={item.title}
+                    config={item.config as DashboardChartConfig}
+                    columns={item.columns}
+                    rows={item.rows}
+                  />
+                ) : (
+                  <div className="h-full overflow-x-auto overflow-y-auto rounded-lg border border-slate-200 shadow-inner dark:border-slate-700">
+                    <table className="min-w-full text-left text-xs">
+                      <thead className="bg-slate-200 text-slate-900 dark:bg-slate-700 dark:text-slate-100">
+                        <tr>
+                          {(item.displayColumns || item.columns).map(
+                            (c, idx) => (
+                              <th
+                                key={item.columns[idx] || c}
+                                className="sticky top-0 z-10 whitespace-nowrap bg-slate-200/95 px-3 py-2 font-semibold backdrop-blur dark:bg-slate-700/95"
+                              >
+                                {c}
+                              </th>
+                            )
+                          )}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {item.rows.map((row, idx) => (
+                          <tr
+                            key={idx}
+                            className={
+                              idx % 2 === 0
+                                ? "bg-white dark:bg-slate-900"
+                                : "bg-slate-50 dark:bg-slate-800"
+                            }
+                          >
+                            {item.columns.map((c) => (
+                              <td
+                                key={c}
+                                className="whitespace-nowrap px-3 py-2 text-slate-800 dark:text-slate-200"
+                              >
+                                {row[c] === null || row[c] === undefined
+                                  ? ""
+                                  : String(row[c])}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                        {!item.rows.length && (
+                          <tr>
+                            <td
+                              colSpan={item.columns.length}
+                              className="px-3 py-4 text-center text-slate-500 dark:text-slate-400"
+                            >
+                              No rows available.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 
   return (
     <div className="space-y-3">
@@ -1143,103 +1762,154 @@ const ChatWithDashboard = ({
                 {previewError}
               </p>
             )}
-            <div className="grid items-start gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {previewItems.map((item) => {
-                const isCollapsed = collapsedWidgetIds.includes(item.widgetId);
-                return (
-                  <div
-                    key={item.widgetId}
-                    className={`flex flex-col rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-800 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ${
-                      isCollapsed ? "space-y-1" : "space-y-3 h-[420px]"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-sm font-semibold text-slate-900 dark:text-white">
-                        {item.title}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => toggleWidgetCollapse(item.widgetId)}
-                          className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-800"
-                          aria-label={
-                            isCollapsed ? "Expand widget" : "Collapse widget"
-                          }
-                        >
-                          <span aria-hidden>{isCollapsed ? "▸" : "▾"}</span>{" "}
-                          {isCollapsed ? "Expand" : "Collapse"}
-                        </button>
-                      </div>
+            {hasSideFilters ? (
+              <div className="grid items-start gap-3 lg:grid-cols-[280px,1fr]">
+                <aside className="flex max-h-[720px] flex-col gap-3 overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-800 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-semibold text-slate-900 dark:text-white">
+                      Filters
                     </div>
-
-                    {!isCollapsed && (
-                      <div className="flex h-full flex-col space-y-3">
-                        {item.widgetType === "chart" ? (
-                          <DashboardChartPreview
-                            title={item.title}
-                            config={item.config as DashboardChartConfig}
-                            columns={item.columns}
-                            rows={item.rows}
-                          />
-                        ) : (
-                          <div className="h-full overflow-x-auto overflow-y-auto rounded-lg border border-slate-200 shadow-inner dark:border-slate-700">
-                            <table className="min-w-full text-left text-xs">
-                              <thead className="bg-slate-200 text-slate-900 dark:bg-slate-700 dark:text-slate-100">
-                                <tr>
-                                  {(item.displayColumns || item.columns).map(
-                                    (c, idx) => (
-                                      <th
-                                        key={item.columns[idx] || c}
-                                        className="sticky top-0 z-10 whitespace-nowrap bg-slate-200/95 px-3 py-2 font-semibold backdrop-blur dark:bg-slate-700/95"
-                                      >
-                                        {c}
-                                      </th>
-                                    )
-                                  )}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {item.rows.map((row, idx) => (
-                                  <tr
-                                    key={idx}
-                                    className={
-                                      idx % 2 === 0
-                                        ? "bg-white dark:bg-slate-900"
-                                        : "bg-slate-50 dark:bg-slate-800"
-                                    }
-                                  >
-                                    {item.columns.map((c) => (
-                                      <td
-                                        key={c}
-                                        className="whitespace-nowrap px-3 py-2 text-slate-800 dark:text-slate-200"
-                                      >
-                                        {row[c] === null || row[c] === undefined
-                                          ? ""
-                                          : String(row[c])}
-                                      </td>
-                                    ))}
-                                  </tr>
-                                ))}
-                                {!item.rows.length && (
-                                  <tr>
-                                    <td
-                                      colSpan={item.columns.length}
-                                      className="px-3 py-4 text-center text-slate-500 dark:text-slate-400"
-                                    >
-                                      No rows available.
-                                    </td>
-                                  </tr>
-                                )}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-                    )}
+                    <button
+                      type="button"
+                      onClick={handleClearFilters}
+                      className="text-[11px] font-semibold text-sky-700 underline hover:text-sky-800 dark:text-sky-300"
+                    >
+                      Clear
+                    </button>
                   </div>
-                );
-              })}
-            </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Filters apply to this dashboard only.
+                  </p>
+
+                  <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                    <span>Portfolio</span>
+                    <select
+                      multiple
+                      value={sideFilters.portfolios}
+                      onChange={handleMultiSelect("portfolios")}
+                      size={Math.min(4, portfolioOptions.length)}
+                      className="rounded-md border border-slate-300 bg-white p-2 text-xs focus:outline-none focus:ring-2 focus:ring-sky-300 dark:border-slate-700 dark:bg-slate-800"
+                    >
+                      {portfolioOptions.map((opt, i) => (
+                        <option key={`${opt}-${i}`} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                    <span>Customer Leaders</span>
+                    <select
+                      multiple
+                      value={sideFilters.customerLeaders}
+                      onChange={handleMultiSelect("customerLeaders")}
+                      size={6}
+                      className="rounded-md border border-slate-300 bg-white p-2 text-xs focus:outline-none focus:ring-2 focus:ring-sky-300 dark:border-slate-700 dark:bg-slate-800"
+                    >
+                      {customerLeaderOptions.map((opt, i) => (
+                        <option key={`${opt}-${i}`} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                    <span>Customer Hiring Managers</span>
+                    <select
+                      multiple
+                      value={sideFilters.customerHiringManagers}
+                      onChange={handleMultiSelect("customerHiringManagers")}
+                      size={6}
+                      className="rounded-md border border-slate-300 bg-white p-2 text-xs focus:outline-none focus:ring-2 focus:ring-sky-300 dark:border-slate-700 dark:bg-slate-800"
+                    >
+                      {customerHiringManagerOptions.map((opt, i) => (
+                        <option key={`${opt}-${i}`} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                    <span>HCL Leaders</span>
+                    <select
+                      multiple
+                      value={sideFilters.hclLeaders}
+                      onChange={handleMultiSelect("hclLeaders")}
+                      size={Math.min(5, hclLeaderOptions.length)}
+                      className="rounded-md border border-slate-300 bg-white p-2 text-xs focus:outline-none focus:ring-2 focus:ring-sky-300 dark:border-slate-700 dark:bg-slate-800"
+                    >
+                      {hclLeaderOptions.map((opt, i) => (
+                        <option key={`${opt}-${i}`} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                    <span>HCL Deliver SPOCs</span>
+                    <select
+                      multiple
+                      value={sideFilters.hclDeliverSpocs}
+                      onChange={handleMultiSelect("hclDeliverSpocs")}
+                      size={Math.min(5, hclDeliverSpocOptions.length)}
+                      className="rounded-md border border-slate-300 bg-white p-2 text-xs focus:outline-none focus:ring-2 focus:ring-sky-300 dark:border-slate-700 dark:bg-slate-800"
+                    >
+                      {hclDeliverSpocOptions.map((opt, i) => (
+                        <option key={`${opt}-${i}`} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                    <span>Quarter</span>
+                    <select
+                      multiple
+                      value={sideFilters.quarters}
+                      onChange={handleMultiSelect("quarters")}
+                      size={4}
+                      className="rounded-md border border-slate-300 bg-white p-2 text-xs focus:outline-none focus:ring-2 focus:ring-sky-300 dark:border-slate-700 dark:bg-slate-800"
+                    >
+                      {QUARTERS.map((opt, i) => (
+                        <option key={`${opt}-${i}`} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <div className="grid grid-cols-2 gap-2 text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                    <label className="flex flex-col gap-1">
+                      <span>Date From</span>
+                      <input
+                        type="date"
+                        value={sideFilters.dateFrom}
+                        onChange={handleDateChange("dateFrom")}
+                        className="rounded-md border border-slate-300 bg-white p-2 text-xs focus:outline-none focus:ring-2 focus:ring-sky-300 dark:border-slate-700 dark:bg-slate-800"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span>Date To</span>
+                      <input
+                        type="date"
+                        value={sideFilters.dateTo}
+                        onChange={handleDateChange("dateTo")}
+                        className="rounded-md border border-slate-300 bg-white p-2 text-xs focus:outline-none focus:ring-2 focus:ring-sky-300 dark:border-slate-700 dark:bg-slate-800"
+                      />
+                    </label>
+                  </div>
+                </aside>
+
+                {renderWidgetGrid(displayedItems)}
+              </div>
+            ) : (
+              renderWidgetGrid(displayedItems)
+            )}
             <div className="pt-2" />
           </div>
         </section>

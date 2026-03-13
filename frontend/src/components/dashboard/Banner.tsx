@@ -173,6 +173,12 @@ const Banner: React.FC<BannerProps> = ({
         const datasetName = ds
           ? formatDatasetName(ds.original_file_name || ds.table_name || "")
           : formatDatasetName(cfg.dataset_id);
+        const aggregation = (cfg.aggregation as string) || "count";
+        const endColumn = cfg.end_column;
+
+        if (aggregation === "avg_date_diff" && !endColumn) {
+          throw new Error("End date column required for avg date diff banner");
+        }
 
         try {
           const { counts: countsIn, total } = await fetchValueCounts({
@@ -182,9 +188,33 @@ const Banner: React.FC<BannerProps> = ({
             column: cfg.column,
             filterOp: cfg.op || cfg.operator,
             filterValues: cfg.values,
+            aggregation: aggregation as any,
+            endColumn,
             filters: cfg.filters,
           });
           let counts = [...countsIn];
+
+          if (aggregation !== "count") {
+            const labelText = cfg.label || cfg.column;
+            const avgValue = counts[0]?.count ?? 0;
+            counts = [{ value: labelText, count: avgValue }];
+
+            counts.forEach((item) => {
+              const key = `${cfg.id}::${item.value}`;
+              nextCounts.set(key, item.count);
+              const prev = prevCountsRef.current.get(key);
+              if (prev !== undefined && prev !== item.count) {
+                changedKeys.push(key);
+              }
+            });
+
+            results.push({
+              config: { ...cfg, dashboard_id: cfg.dashboard_id },
+              datasetName,
+              counts,
+            });
+            continue;
+          }
 
           // If specific values are configured, ensure they appear even when absent in data.
           if (cfg.values && cfg.values.length) {
@@ -217,12 +247,17 @@ const Banner: React.FC<BannerProps> = ({
 
           const selectedValues = (cfg.values || []).map((v) => v.trim());
           const selectedSet = new Set(selectedValues.filter(Boolean));
+          const isContainsOp =
+            (cfg.op || cfg.operator || "").toLowerCase() === "contains";
+
           const aggregatedCount = selectedSet.size
-            ? counts.reduce(
-                (sum, entry) =>
-                  selectedSet.has(entry.value) ? sum + entry.count : sum,
-                0
-              )
+            ? isContainsOp
+              ? total
+              : counts.reduce(
+                  (sum, entry) =>
+                    selectedSet.has(entry.value) ? sum + entry.count : sum,
+                  0
+                )
             : total;
 
           const combinedValue = selectedSet.size

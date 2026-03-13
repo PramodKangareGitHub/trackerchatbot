@@ -7,6 +7,8 @@ export type BannerConfig = {
   values?: string[];
   op?: string;
   operator?: string;
+  aggregation?: "count" | "avg_age" | "avg_date_diff";
+  end_column?: string;
   filters?: {
     table?: string;
     field: string;
@@ -43,6 +45,19 @@ export const readStoredBannerConfigs = (): BannerConfig[] => {
   try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
+    const normalizeAggregation = (
+      value: unknown
+    ): BannerConfig["aggregation"] | undefined => {
+      if (
+        value === "count" ||
+        value === "avg_age" ||
+        value === "avg_date_diff"
+      ) {
+        return value;
+      }
+      return undefined;
+    };
+
     return parsed
       .map((item) => ({
         id: String(item.id || ""),
@@ -59,6 +74,8 @@ export const readStoredBannerConfigs = (): BannerConfig[] => {
             ? String(item.operator)
             : undefined,
         operator: item.operator ? String(item.operator) : undefined,
+        aggregation: normalizeAggregation(item.aggregation),
+        end_column: item.end_column ? String(item.end_column) : undefined,
         filters: Array.isArray(item.filters)
           ? item.filters
               .map((f: any) => ({
@@ -96,6 +113,8 @@ type FetchCountsArgs = {
   column: string;
   filterOp?: string;
   filterValues?: string[];
+  aggregation?: "count" | "avg_age" | "avg_date_diff";
+  endColumn?: string;
   filters?: {
     table?: string;
     field: string;
@@ -112,6 +131,8 @@ export const fetchValueCounts = async ({
   column,
   filterOp,
   filterValues,
+  aggregation = "count",
+  endColumn,
   filters,
 }: FetchCountsArgs): Promise<BannerCountsResult> => {
   const headers: Record<string, string> = {
@@ -154,6 +175,21 @@ export const fetchValueCounts = async ({
       }
     });
 
+    const resolveTableForField = (fieldName: string) => {
+      if (!fieldName) return datasetId;
+      const [maybeTable] = fieldName.split(".");
+      return fieldName.includes(".") ? maybeTable : datasetId;
+    };
+
+    const startFieldTable = resolveTableForField(column);
+    if (startFieldTable && startFieldTable !== datasetId) {
+      joinSet.add(startFieldTable);
+    }
+    const endFieldTable = endColumn ? resolveTableForField(endColumn) : null;
+    if (endFieldTable && endFieldTable !== datasetId) {
+      joinSet.add(endFieldTable);
+    }
+
     allFilters.forEach((f) => {
       params.append(
         "filters",
@@ -187,23 +223,60 @@ export const fetchValueCounts = async ({
       total = data.total as number;
     }
 
-    if (column === TABLE_TOTAL_COLUMN) {
-      counts.set("Total", Number(total) || 0);
-      break;
-    }
-
-    rows.forEach((row) => {
-      const record = row as Record<string, unknown>;
-      const columnKeys = [column];
-      if (!column.includes(".")) {
-        columnKeys.push(`${datasetId}.${column}`);
+    if (aggregation === "count") {
+      if (column === TABLE_TOTAL_COLUMN) {
+        counts.set("Total", Number(total) || 0);
+        break;
       }
 
-      const keyName = columnKeys.find((c) => c in record);
-      const raw = keyName ? record[keyName] : undefined;
-      const key = raw === null || raw === undefined ? "(blank)" : String(raw);
-      counts.set(key, (counts.get(key) || 0) + 1);
-    });
+      rows.forEach((row) => {
+        const record = row as Record<string, unknown>;
+        const columnKeys = [column];
+        if (!column.includes(".")) {
+          columnKeys.push(`${datasetId}.${column}`);
+        }
+
+        const keyName = columnKeys.find((c) => c in record);
+        const raw = keyName ? record[keyName] : undefined;
+        const key = raw === null || raw === undefined ? "(blank)" : String(raw);
+        counts.set(key, (counts.get(key) || 0) + 1);
+      });
+    } else {
+      const msPerDay = 1000 * 60 * 60 * 24;
+      const now = Date.now();
+      rows.forEach((row) => {
+        const record = row as Record<string, unknown>;
+        const startKeys = [column];
+        if (!column.includes(".")) {
+          startKeys.push(`${datasetId}.${column}`);
+        }
+        const startKey = startKeys.find((c) => c in record);
+        const startRaw = startKey ? record[startKey] : undefined;
+        const startDate = startRaw ? new Date(String(startRaw)) : null;
+        if (!startDate || Number.isNaN(startDate.getTime())) return;
+
+        let diffDays: number | null = null;
+        if (aggregation === "avg_age") {
+          diffDays = (now - startDate.getTime()) / msPerDay;
+        } else if (aggregation === "avg_date_diff") {
+          const target = endColumn || column;
+          const endKeys = [target];
+          if (!target.includes(".")) {
+            endKeys.push(`${datasetId}.${target}`);
+          }
+          const endKey = endKeys.find((c) => c in record);
+          const endRaw = endKey ? record[endKey] : undefined;
+          const endDate = endRaw ? new Date(String(endRaw)) : null;
+          if (!endDate || Number.isNaN(endDate.getTime())) return;
+          diffDays = (endDate.getTime() - startDate.getTime()) / msPerDay;
+        }
+
+        if (diffDays === null || Number.isNaN(diffDays)) return;
+        const bucketKey = "__avg__";
+        counts.set(bucketKey, (counts.get(bucketKey) || 0) + diffDays);
+        counts.set("__matched__", (counts.get("__matched__") || 0) + 1);
+      });
+    }
     offset += rows.length;
     if (!rows.length) break;
     if (!Number.isFinite(total)) {
@@ -211,15 +284,33 @@ export const fetchValueCounts = async ({
     }
   }
 
-  let result = Array.from(counts.entries()).map(([value, count]) => ({
-    value,
-    count,
-  }));
+  let result: BannerValueCount[];
 
-  result.sort((a, b) => {
-    if (a.count !== b.count) return b.count - a.count;
-    return a.value.localeCompare(b.value);
-  });
+  if (aggregation === "count") {
+    result = Array.from(counts.entries()).map(([value, count]) => ({
+      value,
+      count,
+    }));
 
-  return { counts: result, total: Number(total) || 0 };
+    result.sort((a, b) => {
+      if (a.count !== b.count) return b.count - a.count;
+      return a.value.localeCompare(b.value);
+    });
+    return { counts: result, total: Number(total) || 0 };
+  }
+
+  const matched = counts.get("__matched__") || 0;
+  const sum = counts.get("__avg__") || 0;
+  const average = matched ? sum / matched : 0;
+  result = [
+    {
+      value:
+        aggregation === "avg_date_diff"
+          ? "Average diff (days)"
+          : "Average age (days)",
+      count: Number(average.toFixed(2)),
+    },
+  ];
+
+  return { counts: result, total: Number(matched) || 0 };
 };

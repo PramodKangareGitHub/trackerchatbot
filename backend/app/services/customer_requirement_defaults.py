@@ -401,4 +401,9 @@ DEFAULT_HCL_LEADERS = [
 
 DEFAULT_HCL_DELIVER_SPOCS = [
     "Thrivikram Reddy C",
+    "Karthik",
+    "Sathish",
+    "Dilip",
+    "Dinesh",
+    "Achit"
 ]

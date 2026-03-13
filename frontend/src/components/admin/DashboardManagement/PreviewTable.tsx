@@ -52,34 +52,63 @@ const matchesAgeRange = (num: number, label: string) => {
 
 const toQuarterLabel = (val: unknown, withYear = false) => {
   if (val === null || val === undefined) return "(blank)";
-  const parsed = new Date(String(val));
-  if (Number.isNaN(parsed.getTime())) return String(val);
-  const q = Math.floor(parsed.getUTCMonth() / 3) + 1;
-  const year = parsed.getUTCFullYear();
-  if (q < 1 || q > 4 || !Number.isFinite(year)) return String(val);
-  return withYear ? `Q${q} ${year}` : `Q${q}`;
+  const str = String(val);
+  const m = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  let month: number | null = null;
+  let year: number | null = null;
+  if (m) {
+    year = Number(m[1]);
+    month = Number(m[2]) - 1;
+  } else {
+    const parsed = new Date(str);
+    if (!Number.isNaN(parsed.getTime())) {
+      month = parsed.getUTCMonth();
+      year = parsed.getUTCFullYear();
+    }
+  }
+  if (month === null || year === null || month < 0 || month > 11) return str;
+  let q: number;
+  let fy = year;
+  if (month >= 3 && month <= 5) {
+    q = 1;
+    fy = year;
+  } else if (month >= 6 && month <= 8) {
+    q = 2;
+    fy = year;
+  } else if (month >= 9 && month <= 11) {
+    q = 3;
+    fy = year;
+  } else {
+    q = 4;
+    fy = year - 1;
+  }
+  if (!Number.isFinite(fy)) return String(val);
+  return withYear ? `Q${q} FY${fy}` : `Q${q}`;
 };
 
 const toLabel = (col: string, selectedValues: string[], val: unknown) => {
   if (isAgeing(col)) return bucketAgeLabel(val);
-  if (isDateCol(col)) {
-    const quarterLabel = toQuarterLabel(val, false);
-    const quarterLabelYear = toQuarterLabel(val, true);
-    const dayLabel = (() => {
-      if (val === null || val === undefined) return "(blank)";
-      const parsed = new Date(String(val));
-      if (Number.isNaN(parsed.getTime())) return String(val);
-      const diffMs = Date.now() - parsed.getTime();
-      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-      if (!Number.isFinite(diffDays)) return String(val);
-      if (diffDays <= 30) return "0-30";
-      if (diffDays <= 60) return "31-60";
-      if (diffDays <= 90) return "61-90";
-      return "90+";
-    })();
-    const hasDay = hasDayRangeVal(selectedValues);
-    const hasQuarter = hasQuarterVal(selectedValues);
-    const hasQuarterYear = hasQuarterValWithYear(selectedValues);
+
+  const quarterLabel = toQuarterLabel(val, false);
+  const quarterLabelYear = toQuarterLabel(val, true);
+  const dayLabel = (() => {
+    if (val === null || val === undefined) return "(blank)";
+    const parsed = new Date(String(val));
+    if (Number.isNaN(parsed.getTime())) return String(val);
+    const diffMs = Date.now() - parsed.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    if (!Number.isFinite(diffDays)) return String(val);
+    if (diffDays <= 30) return "0-30";
+    if (diffDays <= 60) return "31-60";
+    if (diffDays <= 90) return "60-90";
+    return "90+";
+  })();
+
+  const hasDay = hasDayRangeVal(selectedValues);
+  const hasQuarter = hasQuarterVal(selectedValues);
+  const hasQuarterYear = hasQuarterValWithYear(selectedValues);
+
+  if (isDateCol(col) || hasDay || hasQuarter) {
     if (hasDay && hasQuarter) {
       if (selectedValues.includes(dayLabel)) return dayLabel;
       if (hasQuarterYear && selectedValues.includes(quarterLabelYear))
@@ -91,6 +120,7 @@ const toLabel = (col: string, selectedValues: string[], val: unknown) => {
     if (hasDay) return dayLabel;
     if (hasQuarter) return hasQuarterYear ? quarterLabelYear : quarterLabel;
   }
+
   return val === null || val === undefined ? "(blank)" : String(val);
 };
 
@@ -99,6 +129,17 @@ const PreviewTable = ({ tableConfig, data }: PreviewTableProps) => {
   const groupValues = tableConfig.group_by_values || [];
   const filterBy = tableConfig.filter_by || "";
   const filterValues = tableConfig.filter_values || [];
+  const isRangeAgg =
+    (data.columns || []).includes("range") &&
+    (data.columns || []).includes("count");
+  const ageingFields = (tableConfig.filters || [])
+    .filter((f) => (f.op || f.operator || "").toLowerCase() === "ageing_range")
+    .map((f) => {
+      const field = f.field || "";
+      if (field.includes(".")) return field;
+      const table = f.table || tableConfig.dataset_id || "";
+      return table ? `${table}.${field}` : field;
+    });
   const activeFilters = (tableConfig.filters || [])
     .filter(
       (f) => f.field && (Array.isArray(f.value) ? f.value.length : f.value)
@@ -115,6 +156,34 @@ const PreviewTable = ({ tableConfig, data }: PreviewTableProps) => {
       return { ...f, column: prefixed, values, op };
     })
     .filter((f) => (f.values || []).length);
+
+  const ageingSelections = activeFilters
+    .filter((f) => f.op === "ageing_range" || f.op === "quarter")
+    .reduce<Map<string, string[]>>((map, f) => {
+      if (f.column) {
+        const vals = f.values || [];
+        map.set(f.column, vals);
+        const suffix = f.column.includes(".")
+          ? f.column.split(".").slice(-1)[0]
+          : f.column;
+        if (suffix) map.set(suffix, vals);
+      }
+      return map;
+    }, new Map());
+
+  const formatWithAgeingContext = (
+    col: string,
+    selection: string[],
+    rawVal: unknown
+  ) => {
+    const label = toLabel(col, selection, rawVal);
+    const isRange = selection.every((v) => /^\d+\s*-\s*\d+$/.test(v));
+    if (selection.length && isRange) {
+      const primary = selection.length === 1 ? selection[0] : label;
+      return `Ageing: ${primary} days`;
+    }
+    return label;
+  };
 
   const valueFor = (row: Record<string, unknown>, col: string) => {
     if (col in row) return row[col];
@@ -184,6 +253,10 @@ const PreviewTable = ({ tableConfig, data }: PreviewTableProps) => {
     values: string[],
     rowVal: unknown
   ) => {
+    if (rowVal === undefined) {
+      // Column missing from this row (likely joined-table filter). Trust server-side filter.
+      return true;
+    }
     const normalizedOp = normalizeOp(op);
     const rowLabel = toLabel(col, values, rowVal);
     const rowNorm = normalizeValue(rowLabel);
@@ -192,6 +265,29 @@ const PreviewTable = ({ tableConfig, data }: PreviewTableProps) => {
       .filter((v) => v.length);
 
     if (!normVals.length) return true;
+
+    if (normalizedOp === "ageing_range") {
+      // Accept either raw date or a precomputed age (number of days).
+      const asNumber = Number(rowVal);
+      const fromNumber = Number.isFinite(asNumber) ? asNumber : null;
+      const dt = new Date(String(rowVal));
+      const fromDate = Number.isNaN(dt.getTime())
+        ? null
+        : Math.floor((Date.now() - dt.getTime()) / (1000 * 60 * 60 * 24));
+      const diffDays = fromNumber ?? fromDate;
+      if (diffDays === null) return true; // do not hide rows if parsing fails
+      return values.some((v) => matchesAgeRange(diffDays, v));
+    }
+
+    if (normalizedOp === "quarter") {
+      const quarterLabel = toQuarterLabel(rowVal, false);
+      const quarterLabelYear = toQuarterLabel(rowVal, true);
+      return normVals.some(
+        (v) =>
+          v === normalizeValue(quarterLabel) ||
+          v === normalizeValue(quarterLabelYear)
+      );
+    }
 
     if (
       normalizedOp === "between" ||
@@ -232,25 +328,27 @@ const PreviewTable = ({ tableConfig, data }: PreviewTableProps) => {
     return normVals.some((v) => v === rowNorm);
   };
 
-  const rowsAfterFilter = data.rows.filter((row) => {
-    const primaryMatches = filterBy
-      ? matchesSelection(filterBy, filterValues, valueFor(row, filterBy))
-      : true;
-    if (!primaryMatches) return false;
+  const rowsAfterFilter = isRangeAgg
+    ? data.rows
+    : data.rows.filter((row) => {
+        const primaryMatches = filterBy
+          ? matchesSelection(filterBy, filterValues, valueFor(row, filterBy))
+          : true;
+        if (!primaryMatches) return false;
 
-    if (!activeFilters.length) return true;
+        if (!activeFilters.length) return true;
 
-    return activeFilters.every((f) =>
-      matchesFilterOp(
-        f.column || f.field || "",
-        f.op,
-        f.values,
-        valueFor(row, f.column || f.field || "")
-      )
-    );
-  });
+        return activeFilters.every((f) =>
+          matchesFilterOp(
+            f.column || f.field || "",
+            f.op,
+            f.values,
+            valueFor(row, f.column || f.field || "")
+          )
+        );
+      });
 
-  if (groupBy) {
+  if (groupBy && !isRangeAgg) {
     const filteredRows = rowsAfterFilter.filter((row) => {
       const key = valueFor(row, groupBy);
       return matchesSelection(groupBy, groupValues, key);
@@ -272,11 +370,21 @@ const PreviewTable = ({ tableConfig, data }: PreviewTableProps) => {
 
     filteredRows.forEach((row) => {
       const groupKeyRaw = valueFor(row, groupBy);
-      const groupLabel = toLabel(groupBy, groupValues, groupKeyRaw);
+      const selectionForGroup = ageingSelections.get(groupBy) || groupValues;
+      const groupLabel = formatWithAgeingContext(
+        groupBy,
+        selectionForGroup,
+        groupKeyRaw
+      );
 
       const keyParts = [
         groupLabel,
-        ...columns.map((c) => String(valueFor(row, c) ?? "")),
+        ...columns.map((c) => {
+          const selection = ageingSelections.get(c) || [];
+          const rawVal = valueFor(row, c);
+          if (!selection.length) return String(rawVal ?? "");
+          return String(formatWithAgeingContext(c, selection, rawVal));
+        }),
       ];
       const key = keyParts.join("|");
 
@@ -313,19 +421,92 @@ const PreviewTable = ({ tableConfig, data }: PreviewTableProps) => {
   const baseColumns = tableConfig.fields?.length
     ? tableConfig.fields
     : data.columns;
-  const columns = baseColumns.filter((c) => c);
-  const rows = rowsAfterFilter.slice(0, 50).map((row) => {
+  const columns = (() => {
+    if (isRangeAgg) {
+      const cols = data.columns || baseColumns || [];
+      const drop = new Set(
+        ageingFields.flatMap((c) => [c, c.split(".").slice(-1)[0]])
+      );
+      return cols.filter((c) => !drop.has(c));
+    }
+    const trimmed = baseColumns.filter((c) => c);
+    if (!trimmed.length) return data.columns || [];
+    const sampleRow = rowsAfterFilter[0] || data.rows[0] || {};
+    const hasAny = trimmed.some(
+      (c) => c in sampleRow || c.split(".").slice(-1)[0] in sampleRow
+    );
+    return hasAny ? trimmed : data.columns || trimmed;
+  })();
+  const collapseRangeRows = (input: Record<string, unknown>[]) => {
+    const keyCols = columns.filter((c) => c !== "count");
+    if (!keyCols.length) return input;
+    const grouped = new Map<
+      string,
+      { row: Record<string, unknown>; count: number }
+    >();
+    input.forEach((row) => {
+      const keyParts = keyCols.map((c) => {
+        const selection =
+          ageingSelections.get(c) ||
+          ageingSelections.get(c.split(".").slice(-1)[0]) ||
+          [];
+        const rawVal = valueFor(row, c);
+        const display = selection.length
+          ? formatWithAgeingContext(c, selection, rawVal)
+          : rawVal;
+        return display === null || display === undefined ? "" : String(display);
+      });
+      const key = keyParts.join("|");
+      const rowCount = Number(valueFor(row, "count")) || 0;
+      if (grouped.has(key)) {
+        grouped.get(key)!.count += rowCount;
+      } else {
+        const base: Record<string, unknown> = {};
+        keyCols.forEach((c) => {
+          const selection =
+            ageingSelections.get(c) ||
+            ageingSelections.get(c.split(".").slice(-1)[0]) ||
+            [];
+          const rawVal = valueFor(row, c);
+          base[c] = selection.length
+            ? formatWithAgeingContext(c, selection, rawVal)
+            : rawVal;
+        });
+        grouped.set(key, { row: base, count: rowCount });
+      }
+    });
+    return Array.from(grouped.values()).map(({ row, count }) => ({
+      ...row,
+      count,
+    }));
+  };
+
+  const sourceRows = isRangeAgg
+    ? collapseRangeRows(data.rows)
+    : rowsAfterFilter.slice(0, 50);
+
+  const rows = sourceRows.map((row) => {
     const trimmed: Record<string, unknown> = {};
     columns.forEach((c) => {
-      trimmed[c] = valueFor(row, c);
+      const selection = ageingSelections.get(c) || [];
+      const rawVal = valueFor(row, c);
+      trimmed[c] = selection.length
+        ? formatWithAgeingContext(c, selection, rawVal)
+        : rawVal;
     });
     return trimmed;
   });
 
+  const finalRows = rows.length
+    ? rows
+    : columns.length
+      ? [Object.fromEntries(columns.map((c) => [c, 0]))]
+      : [{ value: 0 }];
+
   return (
     <ResultTable
       columns={columns}
-      rows={rows}
+      rows={finalRows}
       showChartToggle={false}
       showCsvDownload={false}
     />

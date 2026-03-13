@@ -479,13 +479,28 @@ const AdminPanel = ({
         throw new Error(body.detail || res.statusText || "Upload failed");
       }
 
-      const data: Dataset = await res.json();
-      setUploadMessage(
-        `Uploaded ${data.original_file_name || uploadFile.name}`
-      );
-      setUploadFile(null);
-      await loadDatasets();
-      setSelectedDatasetId(data.id);
+      const data = await res.json();
+
+      // Legacy dataset upload still supported via fallback response shape.
+      if (data && data.id) {
+        setUploadMessage(
+          `Uploaded ${data.original_file_name || uploadFile.name}`
+        );
+        setUploadFile(null);
+        await loadDatasets();
+        setSelectedDatasetId(data.id);
+      } else {
+        const summaryCounts = data?.counts
+          ? Object.entries(data.counts)
+              .map(([k, v]) => `${k}: ${v}`)
+              .join(", ")
+          : null;
+        setUploadMessage(
+          data?.message ||
+            `Uploaded ${uploadFile.name}${summaryCounts ? ` (${summaryCounts})` : ""}`
+        );
+        setUploadFile(null);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -630,12 +645,31 @@ const AdminPanel = ({
     return {
       dataset_id: base.dataset_id || datasets[0]?.id || "",
       joined_tables: base.joined_tables || [],
+      join_key: base.join_key || "",
       x_field: base.x_field || "",
       y_field: base.y_field || "",
+      x_date_mode: base.x_date_mode || "raw",
+      x_fiscal_year_start_month: base.x_fiscal_year_start_month || 4,
+      x_ageing_ranges: base.x_ageing_ranges || [],
+      x_quarter_values: base.x_quarter_values || [],
+      y_axis_mode: base.y_axis_mode || (base.y_field ? "value" : "count"),
+      y_aggregation:
+        base.y_aggregation ||
+        (base.y_axis_mode === "ageing_days" || base.y_axis_mode === "date_diff"
+          ? "avg"
+          : "sum"),
+      y_start_date_field:
+        base.y_start_date_field ||
+        (base.y_axis_mode === "date_diff" ? base.y_field || "" : ""),
+      y_end_date_field: base.y_end_date_field || "",
+      x_ref: base.x_ref,
+      y_ref: base.y_ref,
       chart_type: base.chart_type || "bar",
       group_by: base.group_by || "",
+      group_by_ref: base.group_by_ref,
       group_by_values: base.group_by_values || [],
       filter_by: base.filter_by || "",
+      filter_by_ref: base.filter_by_ref,
       filter_values: base.filter_values || [],
       filters: base.filters || [],
     };
@@ -763,6 +797,7 @@ const AdminPanel = ({
     }[];
     joined_tables?: string[];
     dataset_id?: string;
+    fields?: string[];
   }) => {
     const normalize = (s: string) =>
       s.toLowerCase().replace(/[^a-z0-9]+/g, "_");
@@ -780,6 +815,9 @@ const AdminPanel = ({
       isDateBucket &&
       (isQuarterVals || isDayRangeVals);
     const params = new URLSearchParams();
+    if ((config.fields || []).length) {
+      (config.fields || []).forEach((f) => params.append("select_fields", f));
+    }
     if (config.filter_by && !skipServerFilter && vals.length) {
       params.set("filter_by", config.filter_by);
       (config.filter_values || []).forEach((v) =>
@@ -879,6 +917,8 @@ const AdminPanel = ({
       column: string,
       selectedValues?: string[],
       operator?: string,
+      aggregation?: "count" | "avg_age" | "avg_date_diff",
+      endColumn?: string,
       filters?: {
         table?: string;
         field: string;
@@ -893,6 +933,8 @@ const AdminPanel = ({
         column,
         filterOp: operator,
         filterValues: selectedValues,
+        aggregation,
+        endColumn,
         filters,
       }),
     [authToken]

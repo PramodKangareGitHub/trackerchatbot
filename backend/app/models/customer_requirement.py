@@ -1,7 +1,7 @@
 from datetime import datetime
 import uuid
 
-from sqlalchemy import Column, DateTime, Float, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String
 from app.db import engine, Base
 
 
@@ -27,6 +27,8 @@ class CustomerRequirement(Base):
     requirement_type = Column(String)
     business_unit = Column(String)
     customer_job_posting_date = Column(DateTime)
+    first_profile_submitted = Column(Boolean, default=False)
+    first_profile_submitted_date = Column(DateTime)
     number_of_positions = Column(Integer)
     sell_rate = Column(Float)
     job_posting_status = Column(String)

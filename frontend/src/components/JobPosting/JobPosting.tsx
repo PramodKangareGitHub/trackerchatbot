@@ -488,7 +488,7 @@ const JobPosting: React.FC<JobPostingProps> = ({
       hcl_onboarding_status:
         prev.hcl_onboarding_status && prev.hcl_onboarding_status !== ""
           ? prev.hcl_onboarding_status
-          : "Selected",
+          : "InProgress",
     }));
     setShowHclOnboarding(true);
     setOpenSections((prev) => ({ ...prev, onboarding: true }));

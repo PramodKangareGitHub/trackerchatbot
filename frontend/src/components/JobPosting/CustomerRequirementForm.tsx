@@ -41,6 +41,8 @@ export type CustomerRequirementRecord = {
   requirement_type?: string;
   business_unit?: string;
   customer_job_posting_date?: string | null;
+  first_profile_submitted?: boolean | null;
+  first_profile_submitted_date?: string | null;
   number_of_positions?: number;
   sell_rate?: number | null;
   job_posting_status?: string;
@@ -82,6 +84,21 @@ const CustomerRequirementForm: React.FC<CustomerRequirementFormProps> = ({
   const toStr = (v: unknown) =>
     v === null || v === undefined ? "" : String(v);
 
+  const toYesNo = (v: unknown) => {
+    if (v === true || v === "true" || v === "True" || v === "YES") return "Yes";
+    if (v === false || v === "false" || v === "False" || v === "NO")
+      return "No";
+    if (typeof v === "string" && v.toLowerCase() === "yes") return "Yes";
+    if (typeof v === "string" && v.toLowerCase() === "no") return "No";
+    return "";
+  };
+
+  const parseYesNo = (v: string): boolean | undefined => {
+    if (v === "Yes") return true;
+    if (v === "No") return false;
+    return undefined;
+  };
+
   const toDateInput = (v: unknown) => {
     if (v === null || v === undefined || v === "") return "";
     const s = String(v);
@@ -119,6 +136,10 @@ const CustomerRequirementForm: React.FC<CustomerRequirementFormProps> = ({
       business_unit: toStr(initialRecord?.business_unit),
       customer_job_posting_date: toDateInput(
         initialRecord?.customer_job_posting_date
+      ),
+      first_profile_submitted: toYesNo(initialRecord?.first_profile_submitted),
+      first_profile_submitted_date: toDateInput(
+        initialRecord?.first_profile_submitted_date
       ),
       sell_rate: toStr(initialRecord?.sell_rate),
       job_posting_status: toStr(initialRecord?.job_posting_status),
@@ -487,6 +508,12 @@ const CustomerRequirementForm: React.FC<CustomerRequirementFormProps> = ({
       business_unit: initialRecord?.business_unit || undefined,
       customer_job_posting_date:
         toDateInput(initialRecord?.customer_job_posting_date) || null,
+      first_profile_submitted:
+        initialRecord?.first_profile_submitted === undefined
+          ? undefined
+          : Boolean(initialRecord.first_profile_submitted),
+      first_profile_submitted_date:
+        toDateInput(initialRecord?.first_profile_submitted_date) || null,
       number_of_positions: initialRecord?.number_of_positions,
       sell_rate: normalizeNumber(initialRecord?.sell_rate),
       job_posting_status: initialRecord?.job_posting_status || undefined,
@@ -523,6 +550,8 @@ const CustomerRequirementForm: React.FC<CustomerRequirementFormProps> = ({
       requirement_type: form.requirement_type || undefined,
       business_unit: form.business_unit || undefined,
       customer_job_posting_date: form.customer_job_posting_date || null,
+      first_profile_submitted: parseYesNo(form.first_profile_submitted),
+      first_profile_submitted_date: form.first_profile_submitted_date || null,
       number_of_positions: initialRecord?.number_of_positions,
       sell_rate: normalizeNumber(form.sell_rate),
       job_posting_status: form.job_posting_status || undefined,
@@ -705,6 +734,8 @@ const CustomerRequirementForm: React.FC<CustomerRequirementFormProps> = ({
       requirement_type: form.requirement_type || undefined,
       business_unit: form.business_unit || undefined,
       customer_job_posting_date: form.customer_job_posting_date || null,
+      first_profile_submitted: parseYesNo(form.first_profile_submitted) ?? null,
+      first_profile_submitted_date: form.first_profile_submitted_date || null,
       number_of_positions: count,
       sell_rate: form.sell_rate ? Number(form.sell_rate) : null,
       job_posting_status: form.job_posting_status || undefined,
@@ -1438,6 +1469,35 @@ const CustomerRequirementForm: React.FC<CustomerRequirementFormProps> = ({
             type="date"
             name="customer_job_posting_date"
             value={form.customer_job_posting_date}
+            onChange={handleChange}
+            className={inputFieldClasses}
+          />
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className="font-medium text-slate-700">
+            First Profile Submitted
+          </span>
+          <select
+            name="first_profile_submitted"
+            value={form.first_profile_submitted}
+            onChange={handleChange}
+            className={selectFieldClasses}
+          >
+            <option value="">Select</option>
+            <option value="Yes">Yes</option>
+            <option value="No">No</option>
+          </select>
+        </label>
+
+        <label className="flex flex-col gap-1">
+          <span className="font-medium text-slate-700">
+            First Profile Submitted Date
+          </span>
+          <input
+            type="date"
+            name="first_profile_submitted_date"
+            value={form.first_profile_submitted_date}
             onChange={handleChange}
             className={inputFieldClasses}
           />

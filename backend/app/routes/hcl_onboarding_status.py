@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/hcl-onboarding", tags=["hcl-onboarding"])
 
 
 class HclOnboardingIn(BaseModel):
-    sap_id: str
+    sap_id: Optional[str] = None
     unique_job_posting_id: str
     demand_id: str
     candidate_contact: str
@@ -47,6 +47,14 @@ def _serialize(row: HclOnboardingStatus) -> dict:
         "created_by": row.created_by,
         "modified_by": row.modified_by,
     }
+
+
+def _normalize_status(status: Optional[str]) -> str:
+    if not status:
+        return "InProgress"
+    if status.strip().lower() == "selected":
+        return "InProgress"
+    return status
 
 
 @router.get("")
@@ -85,11 +93,6 @@ def get_onboarding(
 def upsert_onboarding(
     unique_job_posting_id: str, payload: HclOnboardingIn, db: Session = Depends(get_db)
 ) -> dict:
-    if not payload.sap_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="sap_id is required",
-        )
     if not payload.unique_job_posting_id or not payload.demand_id or not payload.candidate_contact:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -108,6 +111,8 @@ def upsert_onboarding(
     if existing:
         data = payload.dict(exclude_unset=True)
         data.pop("sap_id", None)
+        if "hcl_onboarding_status" in data:
+            data["hcl_onboarding_status"] = _normalize_status(data["hcl_onboarding_status"])
         data["modified_at"] = now
         data["modified_by"] = payload.modified_by or existing.modified_by or "system"
         for key, value in data.items():
@@ -124,8 +129,20 @@ def upsert_onboarding(
             ) from exc
         return {"operation": "updated", "record": _serialize(existing)}
 
+    if payload.sap_id:
+        dup = (
+          db.query(HclOnboardingStatus)
+          .filter(HclOnboardingStatus.sap_id == payload.sap_id)
+          .first()
+        )
+        if dup:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="sap_id already exists",
+            )
+
     data = payload.dict(exclude_unset=True)
-    data["sap_id"] = payload.sap_id
+    data["hcl_onboarding_status"] = _normalize_status(payload.hcl_onboarding_status)
     data.setdefault("created_at", now)
     data.setdefault("modified_at", now)
     data.setdefault("created_by", payload.created_by or "system")

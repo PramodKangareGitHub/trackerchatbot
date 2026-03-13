@@ -140,6 +140,9 @@ const DashboardConfigSection = ({
   const [editDashboardName, setEditDashboardName] = useState("");
   const [editDashboardDesc, setEditDashboardDesc] = useState("");
   const [collapsedWidgetIds, setCollapsedWidgetIds] = useState<string[]>([]);
+  const [ageingTextByWidget, setAgeingTextByWidget] = useState<
+    Record<string, string>
+  >({});
 
   const availableDatasets: Dataset[] = useMemo(
     () => buildFixedDatasets(datasets),
@@ -197,6 +200,17 @@ const DashboardConfigSection = ({
     setEditDashboardName(selectedDashboard?.name || "");
     setEditDashboardDesc(selectedDashboard?.description || "");
   }, [selectedDashboard]);
+
+  useEffect(() => {
+    const validKeys = new Set(widgets.map((w, i) => getWidgetKey(w, i)));
+    setAgeingTextByWidget((prev) => {
+      const next = { ...prev };
+      Object.keys(next).forEach((k) => {
+        if (!validKeys.has(k)) delete next[k];
+      });
+      return next;
+    });
+  }, [widgets, getWidgetKey]);
 
   const widgetEntries = useMemo(
     () =>
@@ -318,7 +332,10 @@ const DashboardConfigSection = ({
         const columnOnly = flt.field?.includes(".")
           ? flt.field.split(".").slice(-1)[0]
           : flt.field;
-        const hasCache = (groupValueOptions[cacheKey] || []).length > 0;
+        const hasCache = Object.prototype.hasOwnProperty.call(
+          groupValueOptions,
+          cacheKey
+        );
         const isLoading = groupValueLoading[cacheKey];
         if (!tableId || !columnOnly || hasCache || isLoading) return;
         fetchGroupByValues(filterKey, "table", tableId, columnOnly, (values) =>
@@ -344,7 +361,10 @@ const DashboardConfigSection = ({
         const columnOnly = flt.field?.includes(".")
           ? flt.field.split(".").slice(-1)[0]
           : flt.field;
-        const hasCache = (groupValueOptions[cacheKey] || []).length > 0;
+        const hasCache = Object.prototype.hasOwnProperty.call(
+          groupValueOptions,
+          cacheKey
+        );
         const isLoading = groupValueLoading[cacheKey];
         if (!tableId || !columnOnly || hasCache || isLoading) return;
         fetchGroupByValues(filterKey, "chart", tableId, columnOnly, (values) =>
@@ -387,7 +407,10 @@ const DashboardConfigSection = ({
 
       const optionsKey = filterOptionsKey(widgetKey, widgetType);
       const fetchKey = `${widgetKey}-filter`;
-      const hasCache = (groupValueOptions[optionsKey] || []).length > 0;
+      const hasCache = Object.prototype.hasOwnProperty.call(
+        groupValueOptions,
+        optionsKey
+      );
       const isLoading = groupValueLoading[optionsKey];
       if (hasCache || isLoading) return;
 
@@ -598,6 +621,57 @@ const DashboardConfigSection = ({
               const displayFieldName = (col: string) =>
                 col.includes(".") ? col.split(".").slice(-1)[0] : col;
 
+              const isDateColumn = (col: string) => {
+                const name = displayFieldName(col || "").toLowerCase();
+                return (
+                  name.includes("date") ||
+                  name.endsWith("_at") ||
+                  name.endsWith("_on") ||
+                  name.includes("_dt")
+                );
+              };
+
+              const currentYear = new Date().getFullYear();
+              const quarterOptions = ["Q1", "Q2", "Q3", "Q4"];
+              const isValidAgeingRange = (input: string) =>
+                /^\s*(\d+\s*-\s*\d+|\d+\+|>\s*\d+)\s*$/.test(input);
+              const parseAgeingList = (text: string) =>
+                text
+                  .split(",")
+                  .map((v) => v.trim())
+                  .filter(Boolean);
+
+              // Show date bucketing controls whenever an X field is chosen so users can force ageing/quarterly even if heuristics miss the column name.
+              const isXDateField = Boolean(chartConfig.x_field);
+              const xDateMode = chartConfig.x_date_mode || "raw";
+              const xAgeingRanges = chartConfig.x_ageing_ranges || [];
+              const xAgeingInput =
+                ageingTextByWidget[widgetKey] ?? xAgeingRanges.join(", ");
+              const allXAgeingValid = xAgeingRanges.every((r) =>
+                isValidAgeingRange(r)
+              );
+              const xQuarterValues =
+                chartConfig.x_quarter_values &&
+                chartConfig.x_quarter_values.length
+                  ? chartConfig.x_quarter_values
+                  : quarterOptions;
+              const fiscalStartMonth =
+                chartConfig.x_fiscal_year_start_month || 4;
+
+              const yIsDateField = isDateColumn(chartConfig.y_field || "");
+              const yAxisMode =
+                chartConfig.y_axis_mode ||
+                (yIsDateField
+                  ? "date_diff"
+                  : chartConfig.y_field
+                    ? "value"
+                    : "count");
+              const yAggregation =
+                chartConfig.y_aggregation ||
+                (yAxisMode === "ageing_days" || yAxisMode === "date_diff"
+                  ? "avg"
+                  : "sum");
+
               const chartFieldOptions = Array.from(
                 new Set([
                   ...(joinedChartColumns.length
@@ -611,6 +685,10 @@ const DashboardConfigSection = ({
                   ...(chartConfig.group_by ? [chartConfig.group_by] : []),
                 ])
               );
+
+              const dateFieldOptions = chartFieldOptions.filter(isDateColumn);
+              const hasDateDiffSelection =
+                yAxisMode === "date_diff" || yIsDateField;
 
               const handleWidgetTypeChange = (nextType: WidgetType) => {
                 const defaultDataset =
@@ -803,9 +881,17 @@ const DashboardConfigSection = ({
                 const columnOnly = field.includes(".")
                   ? field.split(".").slice(-1)[0]
                   : field;
+                const isDate = isDateColumn(field);
+                const current = tableConfig.filters?.[index];
+                const nextOp = isDate ? "ageing_range" : getOp(current || {});
                 const nextFilters = (tableConfig.filters || []).map((f, i) =>
                   i === index
-                    ? { table: tableId, field, op: getOp(f), value: "" }
+                    ? {
+                        table: tableId,
+                        field,
+                        op: nextOp,
+                        value: isDate ? "" : "",
+                      }
                     : f
                 );
                 clearFilterOptionsCache(filterKey, "table");
@@ -843,9 +929,17 @@ const DashboardConfigSection = ({
                 const columnOnly = field.includes(".")
                   ? field.split(".").slice(-1)[0]
                   : field;
+                const isDate = isDateColumn(field);
+                const current = chartConfig.filters?.[index];
+                const nextOp = isDate ? "ageing_range" : getOp(current || {});
                 const nextFilters = (chartConfig.filters || []).map((f, i) =>
                   i === index
-                    ? { table: tableId, field, op: getOp(f), value: [] }
+                    ? {
+                        table: tableId,
+                        field,
+                        op: nextOp,
+                        value: isDate ? "" : [],
+                      }
                     : f
                 );
                 clearFilterOptionsCache(filterKey, "chart");
@@ -990,7 +1084,9 @@ const DashboardConfigSection = ({
                         <div className="flex flex-wrap items-center gap-2 text-xs">
                           {(roleOptions.length ? roleOptions : []).map(
                             (role) => {
-                              const checked = (w.roles || []).includes(role as UserRole);
+                              const checked = (w.roles || []).includes(
+                                role as UserRole
+                              );
                               return (
                                 <label
                                   key={role}
@@ -1011,7 +1107,10 @@ const DashboardConfigSection = ({
                                       updateWidget(idx, {
                                         roles: (next.length
                                           ? next
-                                          : roleOptions.slice(0, 1)) as UserRole[],
+                                          : roleOptions.slice(
+                                              0,
+                                              1
+                                            )) as UserRole[],
                                       });
                                     }}
                                     disabled={!isEditing}
@@ -1170,9 +1269,9 @@ const DashboardConfigSection = ({
                                     <option value="">
                                       Pick a field to add
                                     </option>
-                                    {tableFieldOptions.map((col) => (
+                                    {tableFieldOptions.map((col, i) => (
                                       <option
-                                        key={col}
+                                        key={`${col}-${i}`}
                                         value={col}
                                         className={
                                           (tableConfig.fields || []).includes(
@@ -1288,6 +1387,61 @@ const DashboardConfigSection = ({
                               const isLoadingFilter =
                                 groupValueLoading[cacheKey];
 
+                              const opValue = getOp(flt);
+                              const isDateField = isDateColumn(flt.field || "");
+                              const filterMode = isDateField
+                                ? opValue === "ageing_range"
+                                  ? "ageing"
+                                  : opValue === "quarter"
+                                    ? "quarter"
+                                    : "values"
+                                : "values";
+                              const ageingValues = Array.isArray(flt.value)
+                                ? flt.value.map((v) => String(v))
+                                : (flt.value as string)
+                                  ? [String(flt.value)]
+                                  : [];
+                              const ageingInput = ageingValues.join(", ");
+                              const allAgeingValid = ageingValues.every((v) =>
+                                isValidAgeingRange(v)
+                              );
+                              const parseAgeingList = (text: string) =>
+                                text.split(",").map((v) => v.trim());
+                              const quarterSelected = Array.isArray(flt.value)
+                                ? flt.value
+                                : [];
+
+                              const setDateMode = (mode: string) => {
+                                const nextOp =
+                                  mode === "ageing"
+                                    ? "ageing_range"
+                                    : mode === "quarter"
+                                      ? "quarter"
+                                      : "in";
+                                const nextVal =
+                                  mode === "quarter"
+                                    ? []
+                                    : mode === "ageing"
+                                      ? ageingValues
+                                      : [];
+                                const nextFilters = (
+                                  tableConfig.filters || []
+                                ).map((f, i) =>
+                                  i === idx
+                                    ? {
+                                        ...f,
+                                        op: nextOp,
+                                        value: nextVal,
+                                      }
+                                    : f
+                                );
+                                syncTableFilters(
+                                  nextFilters as NonNullable<
+                                    TableConfig["filters"]
+                                  >
+                                );
+                              };
+
                               return (
                                 <div
                                   key={`${idx}-${flt.field}-${flt.table || ""}`}
@@ -1334,8 +1488,8 @@ const DashboardConfigSection = ({
                                       className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                                     >
                                       <option value="">Select field</option>
-                                      {tableColumns.map((col) => (
-                                        <option key={col} value={col}>
+                                      {tableColumns.map((col, i) => (
+                                        <option key={`${col}-${i}`} value={col}>
                                           {col}
                                         </option>
                                       ))}
@@ -1344,17 +1498,37 @@ const DashboardConfigSection = ({
 
                                   <div className="space-y-1">
                                     <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
-                                      Operator
+                                      {isDateField ? "Filter Type" : "Operator"}
                                     </span>
+                                    {isDateField && (
+                                      <select
+                                        value={filterMode}
+                                        onChange={(e) =>
+                                          setDateMode(e.target.value)
+                                        }
+                                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                      >
+                                        <option value="ageing">Ageing</option>
+                                        <option value="quarter">Quarter</option>
+                                        <option value="values">Values</option>
+                                      </select>
+                                    )}
                                     <select
                                       value={
-                                        flt.op || (flt as any).operator || "in"
+                                        filterMode === "ageing"
+                                          ? "ageing_range"
+                                          : filterMode === "quarter"
+                                            ? "quarter"
+                                            : opValue || "in"
                                       }
                                       onChange={(e) =>
                                         updateFilterOperator(
                                           idx,
                                           e.target.value
                                         )
+                                      }
+                                      disabled={
+                                        isDateField && filterMode !== "values"
                                       }
                                       className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                                     >
@@ -1366,6 +1540,16 @@ const DashboardConfigSection = ({
                                           {opt.label}
                                         </option>
                                       ))}
+                                      {isDateField && (
+                                        <>
+                                          <option value="ageing_range">
+                                            Ageing
+                                          </option>
+                                          <option value="quarter">
+                                            Quarter
+                                          </option>
+                                        </>
+                                      )}
                                     </select>
                                   </div>
 
@@ -1373,60 +1557,128 @@ const DashboardConfigSection = ({
                                     <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
                                       Values
                                     </span>
-                                    <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs shadow-sm dark:border-slate-700 dark:bg-slate-900">
-                                      {isLoadingFilter && (
-                                        <span className="text-slate-500 dark:text-slate-400">
-                                          Loading...
-                                        </span>
-                                      )}
-                                      {!isLoadingFilter &&
-                                        !valueOptions.length && (
+                                    {filterMode === "ageing" ? (
+                                      <div className="space-y-1">
+                                        <input
+                                          type="text"
+                                          value={ageingInput}
+                                          onChange={(e) =>
+                                            updateFilterValue(
+                                              idx,
+                                              selectedTable,
+                                              parseAgeingList(e.target.value)
+                                            )
+                                          }
+                                          placeholder="Enter ranges, e.g., 0-30, 31-60"
+                                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                        />
+                                        {!allAgeingValid && (
+                                          <p className="text-[11px] text-rose-600">
+                                            Please enter valid ranges in format
+                                            min-max (e.g., 0-30)
+                                          </p>
+                                        )}
+                                      </div>
+                                    ) : filterMode === "quarter" ? (
+                                      <select
+                                        multiple
+                                        value={quarterSelected}
+                                        onChange={(e) => {
+                                          const selected = Array.from(
+                                            e.target.selectedOptions
+                                          ).map((o) => o.value);
+                                          updateFilterValue(
+                                            idx,
+                                            selectedTable,
+                                            selected
+                                          );
+                                        }}
+                                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                      >
+                                        {quarterOptions.map((q) => (
+                                          <option key={q} value={q}>
+                                            {q} {currentYear}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    ) : opValue === "contains" ? (
+                                      <input
+                                        type="text"
+                                        value={
+                                          Array.isArray(flt.value)
+                                            ? flt.value[0] || ""
+                                            : flt.value || ""
+                                        }
+                                        onChange={(e) =>
+                                          updateFilterValue(
+                                            idx,
+                                            selectedTable,
+                                            e.target.value
+                                              ? [e.target.value]
+                                              : []
+                                          )
+                                        }
+                                        placeholder="Enter text to match"
+                                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                      />
+                                    ) : (
+                                      <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs shadow-sm dark:border-slate-700 dark:bg-slate-900">
+                                        {isLoadingFilter && (
                                           <span className="text-slate-500 dark:text-slate-400">
-                                            No values
+                                            Loading...
                                           </span>
                                         )}
-                                      {valueOptions.map((val) => {
-                                        const checked = Array.isArray(flt.value)
-                                          ? flt.value.includes(val)
-                                          : false;
-                                        return (
-                                          <label
-                                            key={val}
-                                            className={`flex items-center gap-1 rounded-full border px-2 py-1 shadow-sm transition ${
-                                              checked
-                                                ? "border-sky-500 bg-sky-50 text-sky-700 dark:border-sky-400 dark:bg-sky-900/30 dark:text-sky-100"
-                                                : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                                            }`}
-                                          >
-                                            <input
-                                              type="checkbox"
-                                              checked={checked}
-                                              disabled={
-                                                !selectedTable || !flt.field
-                                              }
-                                              onChange={(e) => {
-                                                const current = Array.isArray(
-                                                  flt.value
-                                                )
-                                                  ? flt.value
-                                                  : [];
-                                                const next = e.target.checked
-                                                  ? [...current, val]
-                                                  : current.filter(
-                                                      (v) => v !== val
-                                                    );
-                                                updateFilterValue(
-                                                  idx,
-                                                  selectedTable,
-                                                  next
-                                                );
-                                              }}
-                                            />
-                                            {val}
-                                          </label>
-                                        );
-                                      })}
-                                    </div>
+                                        {!isLoadingFilter &&
+                                          !valueOptions.length && (
+                                            <span className="text-slate-500 dark:text-slate-400">
+                                              No values
+                                            </span>
+                                          )}
+                                        {valueOptions.map((val) => {
+                                          const checked = Array.isArray(
+                                            flt.value
+                                          )
+                                            ? flt.value.includes(val)
+                                            : false;
+                                          return (
+                                            <label
+                                              key={val}
+                                              className={`flex items-center gap-1 rounded-full border px-2 py-1 shadow-sm transition ${
+                                                checked
+                                                  ? "border-sky-500 bg-sky-50 text-sky-700 dark:border-sky-400 dark:bg-sky-900/30 dark:text-sky-100"
+                                                  : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                              }`}
+                                            >
+                                              <input
+                                                type="checkbox"
+                                                checked={checked}
+                                                disabled={
+                                                  !selectedTable || !flt.field
+                                                }
+                                                onChange={(e) => {
+                                                  const current = Array.isArray(
+                                                    flt.value
+                                                  )
+                                                    ? flt.value
+                                                    : [];
+                                                  const next = e.target.checked
+                                                    ? [...current, val]
+                                                    : current.filter(
+                                                        (v) => v !== val
+                                                      );
+                                                  updateFilterValue(
+                                                    idx,
+                                                    selectedTable,
+                                                    next
+                                                  );
+                                                }}
+                                              />
+                                              {val}
+                                            </label>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
                                   </div>
 
                                   <div className="flex items-end justify-end">
@@ -1536,17 +1788,43 @@ const DashboardConfigSection = ({
                                   </label>
                                   <select
                                     value={chartConfig.x_field || ""}
-                                    onChange={(e) =>
+                                    onChange={(e) => {
+                                      const nextField = e.target.value;
+                                      const keepDateMode =
+                                        chartConfig.x_date_mode || "raw";
+                                      const keepAgeing =
+                                        chartConfig.x_ageing_ranges || [];
+                                      const keepQuarters =
+                                        chartConfig.x_quarter_values &&
+                                        chartConfig.x_quarter_values.length
+                                          ? chartConfig.x_quarter_values
+                                          : quarterOptions;
                                       updateChartConfig({
-                                        x_field: e.target.value,
-                                      })
-                                    }
+                                        x_field: nextField,
+                                        x_date_mode: nextField
+                                          ? keepDateMode
+                                          : "raw",
+                                        x_ageing_ranges: nextField
+                                          ? keepAgeing
+                                          : [],
+                                        x_quarter_values: nextField
+                                          ? keepQuarters
+                                          : [],
+                                      });
+                                      if (!nextField) {
+                                        setAgeingTextByWidget((prev) => {
+                                          const next = { ...prev };
+                                          delete next[widgetKey];
+                                          return next;
+                                        });
+                                      }
+                                    }}
                                     disabled={!isEditing}
                                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                                   >
                                     <option value="">Select column</option>
-                                    {chartFieldOptions.map((col) => (
-                                      <option key={col} value={col}>
+                                    {chartFieldOptions.map((col, i) => (
+                                      <option key={`${col}-${i}`} value={col}>
                                         {col}
                                       </option>
                                     ))}
@@ -1558,21 +1836,205 @@ const DashboardConfigSection = ({
                                   </label>
                                   <select
                                     value={chartConfig.y_field || ""}
-                                    onChange={(e) =>
+                                    onChange={(e) => {
+                                      const nextField = e.target.value;
+                                      const nextIsDate =
+                                        isDateColumn(nextField);
+                                      const inferredMode = nextField
+                                        ? nextIsDate
+                                          ? "date_diff"
+                                          : yAxisMode === "count" ||
+                                              yAxisMode === "date_diff"
+                                            ? "value"
+                                            : yAxisMode
+                                        : "count";
                                       updateChartConfig({
-                                        y_field: e.target.value,
-                                      })
-                                    }
+                                        y_field: nextField,
+                                        y_axis_mode: inferredMode,
+                                        y_start_date_field: nextIsDate
+                                          ? nextField
+                                          : "",
+                                        y_end_date_field: nextIsDate
+                                          ? chartConfig.y_end_date_field || ""
+                                          : "",
+                                      });
+                                    }}
                                     disabled={!isEditing}
                                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                                   >
                                     <option value="">Select column</option>
-                                    {chartFieldOptions.map((col) => (
-                                      <option key={col} value={col}>
+                                    {chartFieldOptions.map((col, i) => (
+                                      <option key={`${col}-${i}`} value={col}>
                                         {col}
                                       </option>
                                     ))}
                                   </select>
+                                  <div className="grid gap-2 sm:grid-cols-2">
+                                    <div className="space-y-1">
+                                      <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                                        Y Measure
+                                      </label>
+                                      <select
+                                        value={yAxisMode}
+                                        onChange={(e) => {
+                                          const mode = e.target
+                                            .value as ChartConfig["y_axis_mode"];
+                                          const nextConfig: Partial<ChartConfig> =
+                                            {
+                                              y_axis_mode: mode,
+                                              y_aggregation:
+                                                mode === "count"
+                                                  ? undefined
+                                                  : yAggregation,
+                                            };
+                                          if (mode !== "date_diff") {
+                                            nextConfig.y_start_date_field = "";
+                                            nextConfig.y_end_date_field = "";
+                                          } else if (
+                                            !chartConfig.y_start_date_field &&
+                                            yIsDateField
+                                          ) {
+                                            nextConfig.y_start_date_field =
+                                              chartConfig.y_field || "";
+                                          }
+                                          updateChartConfig(nextConfig);
+                                        }}
+                                        disabled={!isEditing}
+                                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                      >
+                                        <option value="count">Count</option>
+                                        <option value="value">
+                                          Field value
+                                        </option>
+                                        <option value="ageing_days">
+                                          Ageing days
+                                        </option>
+                                        <option value="date_diff">
+                                          Date difference
+                                        </option>
+                                      </select>
+                                    </div>
+                                    {yAxisMode !== "count" && (
+                                      <div className="space-y-1">
+                                        <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                                          Aggregation
+                                        </label>
+                                        <select
+                                          value={yAggregation}
+                                          onChange={(e) =>
+                                            updateChartConfig({
+                                              y_aggregation: e.target
+                                                .value as NonNullable<
+                                                ChartConfig["y_aggregation"]
+                                              >,
+                                            })
+                                          }
+                                          disabled={!isEditing}
+                                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                        >
+                                          <option value="sum">Sum</option>
+                                          <option value="avg">Average</option>
+                                          <option value="min">Minimum</option>
+                                          <option value="max">Maximum</option>
+                                        </select>
+                                      </div>
+                                    )}
+                                  </div>
+                                  {hasDateDiffSelection && (
+                                    <div className="space-y-2">
+                                      <div className="grid gap-2 sm:grid-cols-2">
+                                        <div className="space-y-1">
+                                          <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                                            Start date field
+                                          </label>
+                                          <select
+                                            value={
+                                              chartConfig.y_start_date_field ||
+                                              (yIsDateField
+                                                ? chartConfig.y_field || ""
+                                                : "")
+                                            }
+                                            onChange={(e) =>
+                                              updateChartConfig({
+                                                y_start_date_field:
+                                                  e.target.value,
+                                              })
+                                            }
+                                            disabled={
+                                              !isEditing ||
+                                              !dateFieldOptions.length
+                                            }
+                                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                          >
+                                            <option value="">
+                                              Select start date
+                                            </option>
+                                            {dateFieldOptions.map((col, i) => (
+                                              <option
+                                                key={`${col}-start-${i}`}
+                                                value={col}
+                                              >
+                                                {col}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                        <div className="space-y-1">
+                                          <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                                            End date field
+                                          </label>
+                                          <select
+                                            value={
+                                              chartConfig.y_end_date_field || ""
+                                            }
+                                            onChange={(e) =>
+                                              updateChartConfig({
+                                                y_end_date_field:
+                                                  e.target.value,
+                                              })
+                                            }
+                                            disabled={
+                                              !isEditing ||
+                                              dateFieldOptions.length < 2
+                                            }
+                                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                          >
+                                            <option value="">
+                                              Select end date
+                                            </option>
+                                            {dateFieldOptions.map((col, i) => (
+                                              <option
+                                                key={`${col}-end-${i}`}
+                                                value={col}
+                                              >
+                                                {col}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                      </div>
+                                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                        Plots day difference (end - start); rows
+                                        with missing dates are skipped.
+                                      </p>
+                                      {(!chartConfig.y_start_date_field ||
+                                        !chartConfig.y_end_date_field ||
+                                        chartConfig.y_start_date_field ===
+                                          chartConfig.y_end_date_field) && (
+                                        <p className="text-[11px] text-rose-600">
+                                          Select two distinct date fields to
+                                          compute the day difference.
+                                        </p>
+                                      )}
+                                    </div>
+                                  )}
+                                  {yAxisMode === "ageing_days" &&
+                                    !yIsDateField && (
+                                      <p className="text-[11px] text-rose-600">
+                                        Select a date column for Y to compute
+                                        ageing days.
+                                      </p>
+                                    )}
                                 </div>
                                 <div className="space-y-1">
                                   <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
@@ -1597,14 +2059,190 @@ const DashboardConfigSection = ({
                                           chartConfig.y_field,
                                         ].filter(Boolean)
                                       : chartFieldOptions
-                                    ).map((col) => (
-                                      <option key={col} value={col}>
+                                    ).map((col, i) => (
+                                      <option key={`${col}-${i}`} value={col}>
                                         {col}
                                       </option>
                                     ))}
                                   </select>
                                 </div>
                               </div>
+
+                              {isXDateField && (
+                                <div className="grid gap-2 sm:grid-cols-3">
+                                  <div className="space-y-1">
+                                    <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                                      Date Bucketing
+                                    </label>
+                                    <select
+                                      value={xDateMode}
+                                      onChange={(e) => {
+                                        const mode = e.target
+                                          .value as ChartConfig["x_date_mode"];
+                                        updateChartConfig({
+                                          x_date_mode: mode,
+                                          x_ageing_ranges:
+                                            mode === "ageing"
+                                              ? xAgeingRanges
+                                              : [],
+                                          x_quarter_values:
+                                            mode === "quarter" ||
+                                            mode === "financial_quarter"
+                                              ? xQuarterValues
+                                              : [],
+                                          x_fiscal_year_start_month:
+                                            mode === "financial_quarter"
+                                              ? fiscalStartMonth || 4
+                                              : chartConfig.x_fiscal_year_start_month,
+                                        });
+                                      }}
+                                      disabled={!isEditing}
+                                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                    >
+                                      <option value="raw">Raw values</option>
+                                      <option value="ageing">Ageing</option>
+                                      <option value="quarter">
+                                        Calendar quarter
+                                      </option>
+                                      <option value="financial_quarter">
+                                        Financial quarter
+                                      </option>
+                                    </select>
+                                  </div>
+
+                                  {xDateMode === "ageing" && (
+                                    <div className="space-y-1 sm:col-span-2">
+                                      <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                                        Ageing ranges
+                                      </label>
+                                      <input
+                                        type="text"
+                                        value={xAgeingInput}
+                                        onChange={(e) => {
+                                          const nextText = e.target.value;
+                                          setAgeingTextByWidget((prev) => ({
+                                            ...prev,
+                                            [widgetKey]: nextText,
+                                          }));
+                                          updateChartConfig({
+                                            x_ageing_ranges:
+                                              parseAgeingList(nextText),
+                                          });
+                                        }}
+                                        placeholder="e.g., 0-30, 31-60, 61-90"
+                                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                        disabled={!isEditing}
+                                      />
+                                      {!allXAgeingValid &&
+                                        xAgeingRanges.length > 0 && (
+                                          <p className="text-[11px] text-rose-600">
+                                            Use min-max ranges separated by
+                                            commas (e.g., 0-30, 31-60).
+                                          </p>
+                                        )}
+                                      {!xAgeingRanges.length && (
+                                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                          Enter comma-separated day ranges;
+                                          missing buckets will render as 0.
+                                        </p>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {xDateMode === "quarter" && (
+                                    <div className="space-y-1 sm:col-span-2">
+                                      <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                                        Calendar quarters
+                                      </label>
+                                      <select
+                                        multiple
+                                        value={xQuarterValues}
+                                        onChange={(e) => {
+                                          const selected = Array.from(
+                                            e.target.selectedOptions
+                                          ).map((o) => o.value);
+                                          updateChartConfig({
+                                            x_quarter_values: selected.length
+                                              ? selected
+                                              : quarterOptions,
+                                          });
+                                        }}
+                                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                        disabled={!isEditing}
+                                      >
+                                        {quarterOptions.map((q) => (
+                                          <option key={q} value={q}>
+                                            {q} {currentYear}
+                                          </option>
+                                        ))}
+                                      </select>
+                                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                        Buckets follow calendar quarters.
+                                        Unselected quarters will be excluded.
+                                      </p>
+                                    </div>
+                                  )}
+
+                                  {xDateMode === "financial_quarter" && (
+                                    <div className="space-y-1 sm:col-span-2">
+                                      <label className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                                        Financial quarters
+                                      </label>
+                                      <div className="grid gap-2 sm:grid-cols-5">
+                                        <div className="sm:col-span-3">
+                                          <select
+                                            multiple
+                                            value={xQuarterValues}
+                                            onChange={(e) => {
+                                              const selected = Array.from(
+                                                e.target.selectedOptions
+                                              ).map((o) => o.value);
+                                              updateChartConfig({
+                                                x_quarter_values:
+                                                  selected.length
+                                                    ? selected
+                                                    : quarterOptions,
+                                              });
+                                            }}
+                                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                            disabled={!isEditing}
+                                          >
+                                            {quarterOptions.map((q) => (
+                                              <option key={q} value={q}>
+                                                {q}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                        <div className="space-y-1 sm:col-span-2">
+                                          <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                                            Fiscal start month
+                                          </label>
+                                          <input
+                                            type="number"
+                                            min={1}
+                                            max={12}
+                                            value={fiscalStartMonth}
+                                            onChange={(e) =>
+                                              updateChartConfig({
+                                                x_fiscal_year_start_month:
+                                                  Number(e.target.value) || 4,
+                                              })
+                                            }
+                                            className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                            disabled={!isEditing}
+                                          />
+                                        </div>
+                                      </div>
+                                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                        Buckets follow financial quarters using
+                                        the fiscal year start month. Labels will
+                                        use the fiscal year (e.g., FY25-26Q1).
+                                      </p>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
 
                               <div className="space-y-2">
                                 <div className="flex items-center justify-between gap-2">
@@ -1658,6 +2296,62 @@ const DashboardConfigSection = ({
                                   );
                                   const isLoadingFilter =
                                     groupValueLoading[cacheKey];
+                                  const opValue = getOp(flt);
+                                  const isDateField = isDateColumn(
+                                    flt.field || ""
+                                  );
+                                  const filterMode = isDateField
+                                    ? opValue === "ageing_range"
+                                      ? "ageing"
+                                      : opValue === "quarter"
+                                        ? "quarter"
+                                        : "values"
+                                    : "values";
+                                  const ageingValues = Array.isArray(flt.value)
+                                    ? flt.value.map((v) => String(v))
+                                    : (flt.value as string)
+                                      ? [String(flt.value)]
+                                      : [];
+                                  const ageingInput = ageingValues.join(", ");
+                                  const allAgeingValid = ageingValues.every(
+                                    (v) => isValidAgeingRange(v)
+                                  );
+                                  const quarterSelected = Array.isArray(
+                                    flt.value
+                                  )
+                                    ? flt.value
+                                    : [];
+
+                                  const setDateMode = (mode: string) => {
+                                    const nextOp =
+                                      mode === "ageing"
+                                        ? "ageing_range"
+                                        : mode === "quarter"
+                                          ? "quarter"
+                                          : "in";
+                                    const nextVal =
+                                      mode === "quarter"
+                                        ? []
+                                        : mode === "ageing"
+                                          ? ageingValues
+                                          : [];
+                                    const nextFilters = (
+                                      chartConfig.filters || []
+                                    ).map((f, i) =>
+                                      i === idx
+                                        ? {
+                                            ...f,
+                                            op: nextOp,
+                                            value: nextVal,
+                                          }
+                                        : f
+                                    );
+                                    syncChartFilters(
+                                      nextFilters as NonNullable<
+                                        ChartConfig["filters"]
+                                      >
+                                    );
+                                  };
 
                                   return (
                                     <div
@@ -1708,8 +2402,11 @@ const DashboardConfigSection = ({
                                           className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                                         >
                                           <option value="">Select field</option>
-                                          {tableColumns.map((col) => (
-                                            <option key={col} value={col}>
+                                          {tableColumns.map((col, i) => (
+                                            <option
+                                              key={`${col}-${i}`}
+                                              value={col}
+                                            >
                                               {col}
                                             </option>
                                           ))}
@@ -1718,19 +2415,46 @@ const DashboardConfigSection = ({
 
                                       <div className="space-y-1">
                                         <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
-                                          Operator
+                                          {isDateField
+                                            ? "Filter Type"
+                                            : "Operator"}
                                         </span>
+                                        {isDateField && (
+                                          <select
+                                            value={filterMode}
+                                            onChange={(e) =>
+                                              setDateMode(e.target.value)
+                                            }
+                                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                          >
+                                            <option value="ageing">
+                                              Ageing
+                                            </option>
+                                            <option value="quarter">
+                                              Quarter
+                                            </option>
+                                            <option value="values">
+                                              Values
+                                            </option>
+                                          </select>
+                                        )}
                                         <select
                                           value={
-                                            flt.op ||
-                                            (flt as any).operator ||
-                                            "in"
+                                            filterMode === "ageing"
+                                              ? "ageing_range"
+                                              : filterMode === "quarter"
+                                                ? "quarter"
+                                                : opValue || "in"
                                           }
                                           onChange={(e) =>
                                             updateChartFilterOperator(
                                               idx,
                                               e.target.value
                                             )
+                                          }
+                                          disabled={
+                                            isDateField &&
+                                            filterMode !== "values"
                                           }
                                           className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                                         >
@@ -1742,6 +2466,16 @@ const DashboardConfigSection = ({
                                               {opt.label}
                                             </option>
                                           ))}
+                                          {isDateField && (
+                                            <>
+                                              <option value="ageing_range">
+                                                Ageing
+                                              </option>
+                                              <option value="quarter">
+                                                Quarter
+                                              </option>
+                                            </>
+                                          )}
                                         </select>
                                       </div>
 
@@ -1749,57 +2483,126 @@ const DashboardConfigSection = ({
                                         <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
                                           Values
                                         </span>
-                                        <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs shadow-sm dark:border-slate-700 dark:bg-slate-900">
-                                          {isLoadingFilter && (
-                                            <span className="text-slate-500 dark:text-slate-400">
-                                              Loading...
-                                            </span>
-                                          )}
-                                          {!isLoadingFilter &&
-                                            !valueOptions.length && (
+                                        {filterMode === "ageing" ? (
+                                          <div className="space-y-1">
+                                            <input
+                                              type="text"
+                                              value={ageingInput}
+                                              onChange={(e) =>
+                                                updateChartFilterValue(
+                                                  idx,
+                                                  selectedTable,
+                                                  parseAgeingList(
+                                                    e.target.value
+                                                  )
+                                                )
+                                              }
+                                              placeholder="Enter ranges, e.g., 0-30, 31-60"
+                                              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                            />
+                                            {!allAgeingValid && (
+                                              <p className="text-[11px] text-rose-600">
+                                                Please enter valid ranges in
+                                                format min-max (e.g., 0-30)
+                                              </p>
+                                            )}
+                                          </div>
+                                        ) : filterMode === "quarter" ? (
+                                          <select
+                                            multiple
+                                            value={quarterSelected}
+                                            onChange={(e) => {
+                                              const selected = Array.from(
+                                                e.target.selectedOptions
+                                              ).map((o) => o.value);
+                                              updateChartFilterValue(
+                                                idx,
+                                                selectedTable,
+                                                selected
+                                              );
+                                            }}
+                                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                          >
+                                            {quarterOptions.map((q) => (
+                                              <option key={q} value={q}>
+                                                {q} {currentYear}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        ) : opValue === "contains" ? (
+                                          <input
+                                            type="text"
+                                            value={
+                                              Array.isArray(flt.value)
+                                                ? flt.value[0] || ""
+                                                : flt.value || ""
+                                            }
+                                            onChange={(e) =>
+                                              updateChartFilterValue(
+                                                idx,
+                                                selectedTable,
+                                                e.target.value
+                                                  ? [e.target.value]
+                                                  : []
+                                              )
+                                            }
+                                            placeholder="Enter text to match"
+                                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                          />
+                                        ) : (
+                                          <div className="flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs shadow-sm dark:border-slate-700 dark:bg-slate-900">
+                                            {isLoadingFilter && (
                                               <span className="text-slate-500 dark:text-slate-400">
-                                                No values
+                                                Loading...
                                               </span>
                                             )}
-                                          {valueOptions.map((val) => {
-                                            const checked =
-                                              selectedValues.includes(val);
-                                            return (
-                                              <label
-                                                key={val}
-                                                className={`flex items-center gap-1 rounded-full border px-2 py-1 shadow-sm transition ${
-                                                  checked
-                                                    ? "border-sky-500 bg-sky-50 text-sky-700 dark:border-sky-400 dark:bg-sky-900/30 dark:text-sky-100"
-                                                    : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-                                                }`}
-                                              >
-                                                <input
-                                                  type="checkbox"
-                                                  checked={checked}
-                                                  disabled={
-                                                    !selectedTable || !flt.field
-                                                  }
-                                                  onChange={(e) => {
-                                                    const current =
-                                                      selectedValues;
-                                                    const next = e.target
-                                                      .checked
-                                                      ? [...current, val]
-                                                      : current.filter(
-                                                          (v) => v !== val
-                                                        );
-                                                    updateChartFilterValue(
-                                                      idx,
-                                                      selectedTable,
-                                                      next
-                                                    );
-                                                  }}
-                                                />
-                                                {val}
-                                              </label>
-                                            );
-                                          })}
-                                        </div>
+                                            {!isLoadingFilter &&
+                                              !valueOptions.length && (
+                                                <span className="text-slate-500 dark:text-slate-400">
+                                                  No values
+                                                </span>
+                                              )}
+                                            {valueOptions.map((val) => {
+                                              const checked =
+                                                selectedValues.includes(val);
+                                              return (
+                                                <label
+                                                  key={val}
+                                                  className={`flex items-center gap-1 rounded-full border px-2 py-1 shadow-sm transition ${
+                                                    checked
+                                                      ? "border-sky-500 bg-sky-50 text-sky-700 dark:border-sky-400 dark:bg-sky-900/30 dark:text-sky-100"
+                                                      : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                                                  }`}
+                                                >
+                                                  <input
+                                                    type="checkbox"
+                                                    checked={checked}
+                                                    disabled={
+                                                      !selectedTable ||
+                                                      !flt.field
+                                                    }
+                                                    onChange={(e) => {
+                                                      const current =
+                                                        selectedValues;
+                                                      const next = e.target
+                                                        .checked
+                                                        ? [...current, val]
+                                                        : current.filter(
+                                                            (v) => v !== val
+                                                          );
+                                                      updateChartFilterValue(
+                                                        idx,
+                                                        selectedTable,
+                                                        next
+                                                      );
+                                                    }}
+                                                  />
+                                                  {val}
+                                                </label>
+                                              );
+                                            })}
+                                          </div>
+                                        )}
                                       </div>
 
                                       <div className="flex items-end justify-end">
@@ -1862,8 +2665,8 @@ const DashboardConfigSection = ({
                                   className="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
                                 >
                                   <option value="">None</option>
-                                  {chartFieldOptions.map((col) => (
-                                    <option key={col} value={col}>
+                                  {chartFieldOptions.map((col, i) => (
+                                    <option key={`${col}-${i}`} value={col}>
                                       {col}
                                     </option>
                                   ))}

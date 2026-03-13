@@ -96,6 +96,23 @@ def _normalize_filters(
     return normalized
 
 
+def _match_column(columns: Sequence[str], targets: set[str]) -> str | None:
+    """Return the first column whose canonical form matches one of the target tokens or ends with it.
+
+    Supports joined-view columns that are prefixed with table aliases (e.g., hd_ageing_as_on_today).
+    """
+
+    canonical_targets = {t.lower() for t in targets}
+    for col in columns:
+        canon = _canon_column(col)
+        if canon in canonical_targets:
+            return col
+        for target in canonical_targets:
+            if canon.endswith(f"_{target}"):
+                return col
+    return None
+
+
 def _result_filter_groups(rows: list[dict[str, Any]], columns: Sequence[str]) -> list[dict[str, Any]]:
     if not rows:
         return []
@@ -605,7 +622,14 @@ async def chat_endpoint(payload: ChatRequest, db: Session = Depends(get_db)) -> 
             status_value = "Onboarded"
         if not status_value:
             return
-        status_col = next((c for c in columns if c.lower() == "status"), None)
+        open_flag_col = _match_column(columns, {"open_demand_flag"})
+        if open_flag_col:
+            already = any(_canon_column(f["column"]) == "open_demand_flag" for f in normalized_filters)
+            if not already:
+                normalized_filters.append({"column": open_flag_col, "values": ["1", "true", "yes"]})
+            return
+
+        status_col = _match_column(columns, {"status"})
         if not status_col:
             return
         already = any(_canon_column(f["column"]) == _canon_column(status_col) for f in normalized_filters)
@@ -659,7 +683,15 @@ async def chat_endpoint(payload: ChatRequest, db: Session = Depends(get_db)) -> 
             status_value = "halted"
         if not status_value:
             return None
-        status_col = next((c for c in columns if c.lower() == "status"), None)
+        open_flag_col = _match_column(columns, {"open_demand_flag"})
+        if open_flag_col:
+            sql = (
+                f"SELECT COUNT(*) AS matched_positions FROM {dataset.table_name} "
+                f"WHERE CAST(COALESCE(\"{open_flag_col}\", 0) AS INTEGER) = 1"
+            )
+            return sql, "status", None
+
+        status_col = _match_column(columns, {"status"})
         if not status_col:
             return None
         sql = (
@@ -679,25 +711,19 @@ async def chat_endpoint(payload: ChatRequest, db: Session = Depends(get_db)) -> 
         if not match:
             return None
         threshold = match.group(1)
-        ageing_col = next((c for c in columns if c.lower() == "ageing_as_on_today"), None)
-        position_col = next((c for c in columns if c.lower() == "position"), None)
+        ageing_col = _match_column(columns, {"ageing_as_on_today"})
+        position_col = _match_column(columns, {"position"})
         location_requested = "location" in qlower or "location-wise" in qlower or "location wise" in qlower
-        location_col = next(
-            (
-                c
-                for c in columns
-                if c
-                and c.strip().lower()
-                in {
-                    "location",
-                    "locations",
-                    "job_location",
-                    "joblocation",
-                    "work_location",
-                    "country",
-                }
-            ),
-            None,
+        location_col = _match_column(
+            columns,
+            {
+                "location",
+                "locations",
+                "job_location",
+                "joblocation",
+                "work_location",
+                "country",
+            },
         )
         # Detect explicit grouping column via "by <col>" syntax
         group_col: str | None = None
@@ -740,17 +766,18 @@ async def chat_endpoint(payload: ChatRequest, db: Session = Depends(get_db)) -> 
         return sql, "ageing", None
 
     ageing_bucket_vp_col: str | None = None
+    tower_group_col: str | None = None
 
     def _ageing_bucket_override_sql() -> tuple[str, str, str | None] | None:
-        nonlocal ageing_bucket_vp_col
+        nonlocal ageing_bucket_vp_col, tower_group_col
         question_lower = (payload.question or "").lower()
         if "ageing" not in question_lower and "aging" not in question_lower:
             return None
         if "bucket" not in question_lower and not re.search(r"0\s*-\s*30|31\s*-\s*60|61\s*-\s*90|90\+", question_lower):
             return None
 
-        ageing_col = next((c for c in columns if c.lower() == "ageing_as_on_today"), None)
-        status_col = next((c for c in columns if c.lower() == "status"), None)
+        ageing_col = _match_column(columns, {"ageing_as_on_today"})
+        status_col = _match_column(columns, {"status"})
         if not ageing_col:
             return None
 
@@ -758,18 +785,15 @@ async def chat_endpoint(payload: ChatRequest, db: Session = Depends(get_db)) -> 
 
         # Capture VP column when request is VP-wise
         if "vp" in question_lower:
-            ageing_bucket_vp_col = next(
-                (
-                    c
-                    for c in columns
-                    if c
-                    and c.strip().lower()
-                    in {"vp", "vp_name", "vpname", "vp_", "vice_president", "vp head", "vphead"}
-                ),
-                None,
+            ageing_bucket_vp_col = _match_column(
+                columns,
+                {"vp", "vp_name", "vpname", "vp_", "vice_president", "vp head", "vphead"},
             )
             if not ageing_bucket_vp_col:
                 ageing_bucket_vp_col = next((c for c in columns if "vp" in (c or "").lower()), None)
+
+        if "tower" in question_lower:
+            tower_group_col = _match_column(columns, {"tower"})
 
         where_clauses = []
         if is_open_demand and status_col:
@@ -780,6 +804,8 @@ async def chat_endpoint(payload: ChatRequest, db: Session = Depends(get_db)) -> 
             where_sql = " WHERE " + " AND ".join(where_clauses)
 
         select_cols = f'"{ageing_col}"'
+        if tower_group_col:
+            select_cols += f', "{tower_group_col}"'
         if ageing_bucket_vp_col:
             select_cols += f', "{ageing_bucket_vp_col}"'
         if status_col:
@@ -1087,57 +1113,50 @@ async def chat_endpoint(payload: ChatRequest, db: Session = Depends(get_db)) -> 
             result_columns = ["business", "count"]
         elif override_kind == "ageing_bucket":
             bucket_order = ["0-30", "31-60", "61-90", "90+"]
-            ageing_col = next((c for c in columns if c.lower() == "ageing_as_on_today"), None)
-            if ageing_bucket_vp_col:
-                buckets_by_vp: dict[str, dict[str, int]] = {}
-                totals_by_vp: dict[str, int] = {}
-                for row in rows:
-                    try:
-                        age_val = float(row.get(ageing_col, 0)) if ageing_col else 0
-                    except Exception:
-                        age_val = 0
-                    label = "90+"
-                    if 0 <= age_val <= 30:
-                        label = "0-30"
-                    elif 31 <= age_val <= 60:
-                        label = "31-60"
-                    elif 61 <= age_val <= 90:
-                        label = "61-90"
+            ageing_col = _match_column(columns, {"ageing_as_on_today"})
 
-                    vp_val_raw = row.get(ageing_bucket_vp_col)
-                    vp_val = str(vp_val_raw).strip() if vp_val_raw is not None else "Unknown"
-                    buckets_by_vp.setdefault(vp_val, {lbl: 0 for lbl in bucket_order})
-                    buckets_by_vp[vp_val][label] = buckets_by_vp[vp_val].get(label, 0) + 1
-                    totals_by_vp[vp_val] = totals_by_vp.get(vp_val, 0) + 1
+            def bucket_label(val: object) -> str:
+                try:
+                    num = float(val)
+                except Exception:
+                    num = 0
+                if 0 <= num <= 30:
+                    return "0-30"
+                if 31 <= num <= 60:
+                    return "31-60"
+                if 61 <= num <= 90:
+                    return "61-90"
+                return "90+"
+
+            group_key_col = tower_group_col or ageing_bucket_vp_col
+
+            if group_key_col:
+                buckets_grouped: dict[str, dict[str, int]] = {}
+                for row in rows:
+                    label = bucket_label(row.get(ageing_col))
+                    key_raw = row.get(group_key_col)
+                    key_val = str(key_raw).strip() if key_raw is not None else "Unknown"
+                    buckets_grouped.setdefault(key_val, {lbl: 0 for lbl in bucket_order})
+                    buckets_grouped[key_val][label] = buckets_grouped[key_val].get(label, 0) + 1
 
                 rows = []
-                for vp_val, bucket_counts in buckets_by_vp.items():
+                for key_val, bucket_counts in buckets_grouped.items():
                     for label in bucket_order:
                         total_open = bucket_counts.get(label, 0)
                         if total_open <= 0:
                             continue
                         rows.append(
                             {
-                                ageing_bucket_vp_col: vp_val,
+                                group_key_col: key_val,
                                 "ageing_bucket": label,
                                 "total_open": total_open,
                             }
                         )
-                result_columns = [ageing_bucket_vp_col, "ageing_bucket", "total_open"]
+                result_columns = [group_key_col, "ageing_bucket", "total_open"]
             else:
                 buckets: dict[str, int] = {label: 0 for label in bucket_order}
                 for row in rows:
-                    try:
-                        age_val = float(row.get(ageing_col, 0)) if ageing_col else 0
-                    except Exception:
-                        age_val = 0
-                    label = "90+"
-                    if 0 <= age_val <= 30:
-                        label = "0-30"
-                    elif 31 <= age_val <= 60:
-                        label = "31-60"
-                    elif 61 <= age_val <= 90:
-                        label = "61-90"
+                    label = bucket_label(row.get(ageing_col))
                     buckets[label] = buckets.get(label, 0) + 1
                 rows = [{"ageing_bucket": label, "count": buckets[label]} for label in bucket_order if buckets.get(label, 0) > 0]
                 result_columns = ["ageing_bucket", "count"]
@@ -1145,13 +1164,13 @@ async def chat_endpoint(payload: ChatRequest, db: Session = Depends(get_db)) -> 
             result_columns = list(rows[0].keys()) if rows else ["matched_positions"]
 
         result_filter_groups = _result_filter_groups(rows, result_columns)
-        # Preserve implied status filter for open-demand VP requests and ageing buckets so drill sees it
+        # Preserve implied status filter for open-demand VP/tower requests and ageing buckets so drill sees it
         if open_demand_filter:
             col_name, val = open_demand_filter
             result_filter_groups.append({"column": col_name, "values": [val]})
         if override_kind == "ageing_bucket":
             # Expose the underlying ageing column with bucket labels for drill
-            ageing_col = next((c for c in columns if c.lower() == "ageing_as_on_today"), None)
+            ageing_col = _match_column(columns, {"ageing_as_on_today"})
             if ageing_col:
                 bucket_labels = [row.get("ageing_bucket") for row in rows if row.get("ageing_bucket")]
                 dedup = []

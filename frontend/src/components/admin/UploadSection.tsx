@@ -20,7 +20,9 @@ const UploadSection = ({
           Upload Excel
         </h3>
         <span className="text-xs text-slate-500 dark:text-slate-400">
-          .xlsx or .xls
+          .xlsx or .xls (5 tabs: customer_requirements, hcl_demand,
+          interviewed_candidate_details, hcl_onboarding_status,
+          optum_onboarding_status)
         </span>
       </div>
       <div className="flex flex-col gap-3 text-sm sm:flex-row sm:items-center sm:gap-4">
@@ -49,8 +51,9 @@ const UploadSection = ({
         </button>
       </div>
       <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-        After upload, the dataset becomes available for chat and record
-        insertions.
+        Upload replaces all data in those tables before inserting rows from the
+        Excel file. Legacy single-sheet dataset upload still works as a
+        fallback.
       </p>
     </section>
   );

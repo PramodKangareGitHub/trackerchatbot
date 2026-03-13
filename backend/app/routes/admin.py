@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 import io
 import json
+import re
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -713,6 +715,7 @@ async def admin_list_records(
     filter_values: Optional[List[str]] = Query(default=None),
     filters: Optional[List[str]] = Query(default=None),
     joined_tables: Optional[List[str]] = Query(default=None),
+    select_fields: Optional[List[str]] = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
@@ -790,6 +793,27 @@ async def admin_list_records(
     params: Dict[str, Any] = {"limit": limit, "offset": offset}
 
     join_filter_clauses: List[str] = []
+    ageing_requests: List[Dict[str, Any]] = []
+    extra_select_cols: List[str] = []
+    extra_group_cols: List[str] = []
+
+    # Optional projection for aggregated responses (e.g., ageing buckets) to surface selected fields
+    if select_fields:
+        for raw_field in select_fields:
+            field = str(raw_field or "").strip()
+            if not field:
+                continue
+            if "." in field:
+                prefix, column = field.split(".", 1)
+            else:
+                prefix, column = dataset_id, field
+            if prefix not in columns_by_key or column not in columns_by_key[prefix]:
+                continue
+            # only support base-table columns for aggregation projection
+            if alias_by_key[prefix] != base_table_name:
+                continue
+            extra_select_cols.append(f'base."{column}" AS "{prefix}.{column}"')
+            extra_group_cols.append(f'base."{column}"')
 
     if filter_by:
         prefix = filter_by.split(".")[0] if "." in filter_by else dataset_id
@@ -831,6 +855,13 @@ async def admin_list_records(
             alias = expr_alias or table_alias
             placeholders: List[str] = []
 
+            current_year = datetime.utcnow().year
+
+            def last_day_of_month(year: int, month: int) -> datetime:
+                if month == 12:
+                    return datetime(year, 12, 31)
+                return datetime(year, month + 1, 1) - timedelta(days=1)
+
             def add(val: str, suffix: str) -> str:
                 key = f"multi_f_{idx}_{suffix}"
                 params[key] = val
@@ -864,6 +895,43 @@ async def admin_list_records(
                 low = add(values[0], "0")
                 high = add(values[1], "1")
                 return f'"{alias}"."{column}" BETWEEN {low} AND {high}', None
+
+            if op_l == "ageing_range":
+                raw = values[0] if values else ""
+                match = re.match(r"^\s*(\d+)\s*-\s*(\d+)\s*$", raw)
+                if not match:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Please enter a valid range in format min-max (e.g., 0-30)",
+                    )
+                low_v, high_v = int(match.group(1)), int(match.group(2))
+                if low_v > high_v:
+                    low_v, high_v = high_v, low_v
+                age_expr = f"(julianday('now') - julianday(\"{alias}\".\"{column}\"))"
+                return f"{age_expr} BETWEEN {low_v} AND {high_v}", None
+
+            if op_l == "quarter":
+                clauses: List[str] = []
+                for i, v in enumerate(values):
+                    m = re.match(r"^q([1-4])$", v.strip(), re.IGNORECASE)
+                    if not m:
+                        continue
+                    q = int(m.group(1))
+                    start_month = (q - 1) * 3 + 1
+                    end_month = start_month + 2
+                    start_dt = datetime(current_year, start_month, 1)
+                    end_dt = last_day_of_month(current_year, end_month)
+                    start_key = add(start_dt.strftime("%Y-%m-%d"), f"q{i}a")
+                    end_key = add(end_dt.strftime("%Y-%m-%d"), f"q{i}b")
+                    clauses.append(
+                        f'"{alias}"."{column}" BETWEEN {start_key} AND {end_key}'
+                    )
+                if not clauses:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Quarter filter requires Q1, Q2, Q3, or Q4",
+                    )
+                return f"({' OR '.join(clauses)})", None
 
             # fallback to equality/in
             target = add(values[0], "0")
@@ -914,6 +982,29 @@ async def admin_list_records(
                 continue
 
             expr_alias = "jf" if table_alias != base_table_name else table_alias
+            # Special handling: if multiple ageing ranges provided, we need bucketed counts (including zeros)
+            if op == "ageing_range" and len(values) > 1:
+                parsed_ranges: List[tuple[int, int, str]] = []
+                for raw in values:
+                    m = re.match(r"^\s*(\d+)\s*-\s*(\d+)\s*$", raw)
+                    if not m:
+                        continue
+                    low_v, high_v = int(m.group(1)), int(m.group(2))
+                    if low_v > high_v:
+                        low_v, high_v = high_v, low_v
+                    label = f"{low_v}-{high_v}"
+                    parsed_ranges.append((low_v, high_v, label))
+                if parsed_ranges:
+                    ageing_requests.append(
+                        {
+                            "table_alias": expr_alias or table_alias,
+                            "column": column,
+                            "ranges": parsed_ranges,
+                        }
+                    )
+                # Skip adding a standard where clause; handled later via aggregation
+                continue
+
             clause, disallow_clause = build_clause(
                 table_alias,
                 column,
@@ -938,6 +1029,54 @@ async def admin_list_records(
                     )
 
     try:
+        # If we have an ageing bucket request, aggregate counts per range (including zero) instead of returning raw rows
+        if ageing_requests:
+            req = ageing_requests[0]  # support first ageing filter for now
+            range_rows: List[Dict[str, Any]] = []
+            for i, (low_v, high_v, label) in enumerate(req["ranges"]):
+                params[f"r{i}l"] = low_v
+                params[f"r{i}h"] = high_v
+                params[f"r{i}label"] = label
+            ranges_sql = ", ".join(
+                [f"(:r{i}l, :r{i}h, :r{i}label)" for i, _ in enumerate(req["ranges"])]
+            )
+            where_sql = " WHERE " + " AND ".join(where_clauses + join_filter_clauses) if (where_clauses or join_filter_clauses) else ""
+
+            if not join_entries:
+                base_select = f'SELECT * FROM "{base_table_name}"{where_sql}'
+            else:
+                join_sql = " ".join(
+                    [
+                        f'LEFT JOIN "{tbl_name}" ON "{tbl_name}"."unique_job_posting_id" = "{base_table_name}"."unique_job_posting_id"'
+                        for _, tbl_name, _ in join_entries
+                    ]
+                )
+                base_select = f'SELECT * FROM "{base_table_name}" {join_sql}{where_sql}'
+
+            age_expr = f'(julianday("now") - julianday("base"."{req["column"]}"))'
+            extra_select_sql = (", " + ", ".join(extra_select_cols)) if extra_select_cols else ""
+            extra_group_sql = (", " + ", ".join(extra_group_cols)) if extra_group_cols else ""
+            sql = text(
+                "WITH ranges(low, high, label) AS (VALUES "
+                + ranges_sql
+                + "), base AS ("
+                + base_select
+                + ") SELECT ranges.label AS range"
+                + extra_select_sql
+                + ", COALESCE(SUM(CASE WHEN "
+                + age_expr
+                + " BETWEEN ranges.low AND ranges.high THEN 1 ELSE 0 END), 0) AS count FROM ranges LEFT JOIN base ON 1=1 GROUP BY ranges.label"
+                + extra_group_sql
+                + " ORDER BY ranges.low"
+            )
+            with engine.connect() as conn:
+                rows = conn.execute(sql, params).mappings().all()
+            return {
+                "columns": ["range", *[c.split(" AS ")[-1].strip('"') for c in extra_select_cols], "count"],
+                "rows": [dict(row) for row in rows],
+                "total": len(rows),
+            }
+
         all_where_clauses = where_clauses + join_filter_clauses
         if not join_entries:
             where_sql = " WHERE " + " AND ".join(all_where_clauses) if all_where_clauses else ""

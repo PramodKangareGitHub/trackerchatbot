@@ -7,9 +7,13 @@ from app.db import engine, Base
 class HclOnboardingStatus(Base):
     __tablename__ = "hcl_onboarding_status"
 
-    sap_id = Column(String(128), primary_key=True)
+    sap_id = Column(String(128), nullable=True, unique=True)
     unique_job_posting_id = Column(
-        String(128), ForeignKey("customer_requirements.unique_job_posting_id"), nullable=False, index=True
+        String(128),
+        ForeignKey("customer_requirements.unique_job_posting_id"),
+        primary_key=True,
+        nullable=False,
+        index=True,
     )
     demand_id = Column(String(128), ForeignKey("hcl_demand.demand_id"), nullable=False, index=True)
     candidate_contact = Column(

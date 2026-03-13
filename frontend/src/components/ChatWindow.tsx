@@ -275,7 +275,8 @@ const ChatWindow = ({
       const data: Dataset[] = await res.json();
       setDatasets(data);
       if (data.length && !selectedDatasetId) {
-        setSelectedDatasetId(data[0].id);
+        const joined = data.find((d) => d.id === "joined_job_postings");
+        setSelectedDatasetId(joined ? joined.id : data[0].id);
       }
       if (!data.length) {
         setStatusMessage("Upload a dataset in Admin, then chat here.");
